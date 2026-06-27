@@ -94,7 +94,7 @@ ITEM_GET_MAP = {
 PET_GET_MAP = {
     "pet-item.bmp": "trader",
     "pet-item2.bmp": "coin-scale",
-    "pet-item3.bmp": "chronicles,",
+    "pet-item3.bmp": "chronicles",
     "pet-item4.bmp": "do-re-mi",
     "pet-item5.bmp": "banana-lion"
 }
