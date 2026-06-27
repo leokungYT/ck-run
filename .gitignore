@@ -1,0 +1,16 @@
+# Python cache
+__pycache__/
+*.py[cod]
+
+# Runtime / generated state
+shared_stats.json
+_tmp_*/
+
+# Account data — DO NOT publish (game saves contain member IDs)
+*.zip
+backup/*.xml
+push-file-ck/backup/*
+push-file-ck/input-id/*
+
+# keep empty folders in the repo
+!**/.gitkeep
