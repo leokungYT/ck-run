@@ -70,18 +70,23 @@ NO_WINDOW = {'creationflags': subprocess.CREATE_NO_WINDOW} if os.name == 'nt' el
 PACKAGE = "com.devsisters.crg"
 DATA_DIR = "/data/data/com.devsisters.crg"
 
-# ── เปิด/ปิด root ──
-# USE_MUMU_ROOT = True  → เปิด/ปิด root ผ่าน MuMuManager (สำหรับ MuMu)
-# USE_MUMU_ROOT = False → ใช้ adb root/unroot (สำหรับ AVD ธรรมดา)
-USE_MUMU_ROOT = True
-# path ของ MuMuManager.exe (ดูจาก info: nx_main\MuMuManager.exe)
+# ── เลือกโหมด root ──
+#   "auto" = ตรวจอัตโนมัติ: เจอ MuMuManager + instance → ใช้ MuMu,
+#            ไม่งั้นสลับไปโหมด adb root ให้เอง (AVD/อีมูเลเตอร์ทั่วไป)
+#   "mumu" = บังคับใช้ MuMu (root ผ่าน MuMuManager + su -c)
+#   "adb"  = บังคับใช้ adb root/unroot (AVD/อีมูเลเตอร์ทั่วไป)
+ROOT_MODE = "auto"
+
+# path ของ MuMuManager.exe (เฉพาะโหมด MuMu — ดูจาก info: nx_main\MuMuManager.exe)
 MUMU_MANAGER = r"C:\Program Files\Netease\MuMuPlayer\nx_main\MuMuManager.exe"
-# index ของ instance — ดูได้จาก:  MuMuManager.exe info -v all
+# index ของ instance สำรอง ถ้า map index ไม่เจอ (ดูได้จาก: MuMuManager.exe info -v all)
 MUMU_INDEX = "2"
-# จัดการไฟล์ด้วย su -c หรือไม่ (True = MuMu, False = adb root mode)
-USE_SU = True
-# เวลารอหลัง adb root/unroot (เฉพาะโหมด adb root, USE_MUMU_ROOT=False) (วินาที)
+# เวลารอหลัง adb root/unroot (เฉพาะโหมด adb root) (วินาที)
 ROOT_TOGGLE_WAIT = 3
+
+# ── สถานะ root ตอนรัน (ตั้งอัตโนมัติตาม ROOT_MODE/การตรวจเครื่อง — ไม่ต้องแก้เอง) ──
+USE_MUMU_ROOT = (ROOT_MODE == "mumu")   # True = toggle root ผ่าน MuMuManager
+USE_SU = (ROOT_MODE != "adb")           # True = สั่ง shell ผ่าน su -c
 
 # ── ไฟล์ที่ต้อง push กลับ (ต้องใช้ root) ──
 SHARED_PREFS_DIR = "/data/data/com.devsisters.crg/shared_prefs"
@@ -382,23 +387,51 @@ def _device_online(serial):
     return r is not None and r.stdout.strip() == "device"
 
 
+def _apply_root_mode(mumu):
+    """ตั้งโหมด root ให้ทั้งระบบ (เรียกตอน discover หลังตรวจเจอชนิดเครื่อง)"""
+    global USE_MUMU_ROOT, USE_SU
+    USE_MUMU_ROOT = mumu
+    USE_SU = mumu   # MuMu → su -c เสมอ; adb → จะ probe ปรับ USE_SU อีกที
+
+
+def _probe_adb_su(serial):
+    """โหมด adb: ลอง adb root แล้วดูว่าเครื่องให้ root ทาง id ตรงๆ (USE_SU=False)
+    หรือเป็นเครื่องที่ root ด้วย su (USE_SU=True) แล้วตั้งค่าให้ทั้งระบบ"""
+    global USE_SU
+    _adb_host(serial, ["root"], timeout=20)
+    _adb_host(serial, ["wait-for-device"], timeout=20)
+    time.sleep(1)
+    dev = AdbClient(host="127.0.0.1", port=5037).device(serial)
+    if dev is None:
+        return
+    if "uid=0" in _shell(dev, "id"):
+        USE_SU = False
+        print(f"{Fore.GREEN}[ROOT] โหมด: adb root (shell เป็น root ตรงๆ){Style.RESET_ALL}")
+    elif "uid=0" in _shell(dev, "su -c id"):
+        USE_SU = True
+        print(f"{Fore.GREEN}[ROOT] โหมด: su (อีมูเลเตอร์ root ผ่าน su -c){Style.RESET_ALL}")
+    else:
+        print(f"{Fore.RED}[ROOT] ⚠ เปิด root ไม่ได้ — เปิด root/ADB-root ใน setting ของอีมูเลเตอร์ก่อน{Style.RESET_ALL}")
+
+
 def discover_devices():
     """
-    คืน list ของ serial ที่จะใช้
-    - โหมด MuMu: อ่าน instance จาก MuMuManager แล้ว connect ผ่าน adb_port ทางการ
-      (ได้ serial ที่ map กับ index แน่นอน → toggle root ถูกตัว) แต่ละเครื่อง
-    - ถ้า MuMu ไม่ให้ข้อมูล → fallback เป็น port-scan ปกติ
+    คืน list ของ serial ที่จะใช้ + เลือกโหมด root ให้อัตโนมัติ
+    - เจอ MuMuManager + instance → โหมด MuMu (toggle root ผ่าน MuMuManager, su -c)
+    - ไม่งั้น → โหมด adb (port-scan + adb root / su ตามที่ probe เจอ)
     """
     global MUMU_MANAGER_PATH
-    if USE_MUMU_ROOT:
+
+    # ── 1) ลองโหมด MuMu ก่อน (ถ้า ROOT_MODE = auto/mumu) ──
+    if ROOT_MODE in ("auto", "mumu"):
         MUMU_MANAGER_PATH = find_mumu_manager() or ""
+        instances = []
         if MUMU_MANAGER_PATH:
             print(f"{Fore.GREEN}[MuMu] ใช้ MuMuManager: {MUMU_MANAGER_PATH}{Style.RESET_ALL}")
-        else:
-            print(f"{Fore.RED}[MuMu] หา MuMuManager.exe ไม่เจอ! แก้ MUMU_MANAGER ในไฟล์นี้{Style.RESET_ALL}")
-
-        instances = get_mumu_instances()
+            instances = get_mumu_instances()
         if instances:
+            _apply_root_mode(True)
+            print(f"{Fore.GREEN}[ROOT] โหมด: MuMu (toggle root ผ่าน MuMuManager){Style.RESET_ALL}")
             devices = []
             for idx, serial in instances:
                 _adb_connect(serial)
@@ -410,10 +443,18 @@ def discover_devices():
             time.sleep(1)
             if devices:
                 return devices
-        print(f"{Fore.YELLOW}[MuMu] อ่าน instance ไม่ได้ → ใช้ port-scan แทน (root อาจ map index ไม่ตรง){Style.RESET_ALL}")
+        if ROOT_MODE == "mumu":
+            print(f"{Fore.YELLOW}[MuMu] บังคับโหมด MuMu แต่หา instance ไม่เจอ → ลอง port-scan{Style.RESET_ALL}")
+        else:
+            print(f"{Fore.YELLOW}[ROOT] ไม่เจอ MuMu → สลับไปโหมด adb root อัตโนมัติ{Style.RESET_ALL}")
 
+    # ── 2) โหมด adb (อีมูเลเตอร์ทั่วไป / AVD) ──
+    _apply_root_mode(ROOT_MODE == "mumu")   # mumu คงไว้ (ผู้ใช้บังคับ), อื่นๆ = adb
     connect_known_ports()
-    return get_connected_devices()
+    devices = get_connected_devices()
+    if devices and not USE_MUMU_ROOT:
+        _probe_adb_su(devices[0])
+    return devices
 
 
 # =========================================================

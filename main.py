@@ -395,6 +395,28 @@ def wait_and_click(device, name, timeout=C.DEFAULT_WAIT, required=True,
     return False
 
 
+def wait_and_click_first(device, names, timeout=C.DEFAULT_WAIT, post_delay=1.0,
+                         folder=C.IMG_DIR, threshold=C.MATCH_THRESHOLD):
+    """รอ template หลายตัวพร้อมกัน เจอตัวไหนก่อนคลิกตัวนั้น (ลำดับใน names = ลำดับความสำคัญ)
+    คืนชื่อไฟล์ที่คลิก หรือ None ถ้า timeout ไม่เจอเลย"""
+    paths = [(n, img_path(n, folder)) for n in names]
+    start = time.time()
+    while time.time() - start < timeout:
+        if not bot_running:
+            return None
+        img = fast_screencap(device)
+        for name, path in paths:
+            pts = ImgSearchADB(img, path, threshold)
+            if pts:
+                x, y = pts[0]
+                log(device.serial, f"คลิก {name} ที่ ({x},{y})")
+                tap(device, x, y)
+                time.sleep(post_delay)
+                return name
+        time.sleep(0.3)
+    return None
+
+
 def click_fixed(device, x, y, label="", post_delay=1.0):
     log(device.serial, f"คลิกตำแหน่ง ({x},{y}) {label}")
     tap(device, x, y)
@@ -809,8 +831,17 @@ def run_play_sequence(device):
         else:
             wait_and_click(device, f"play{i}.bmp", timeout=C.PLAY_STEP_TIMEOUT, required=False, post_delay=1.5)
 
-    # play7 → play11 (ไม่เจอใน 10 วิ ข้ามไปเลย กันค้างรอ 60 วิ)
-    for i in range(7, 12):
+    # play7: ถ้าเจอ play8 ก่อน ให้ข้าม play7 แล้วทำ play8 ทันที
+    clicked = wait_and_click_first(device, ["play7.bmp", "play8.bmp"],
+                                   timeout=C.PLAY_STEP_TIMEOUT, post_delay=1.5)
+    if clicked == "play8.bmp":
+        log(serial, "เจอ play8 ก่อน → ข้าม play7 ทำ play9 ต่อ", Fore.YELLOW)
+        start_idx = 9   # play8 กดไปแล้ว → เริ่ม play9
+    else:
+        start_idx = 8   # เจอ play7 หรือ timeout → ทำ play8 ต่อ
+
+    # play(start_idx) → play11 (ไม่เจอใน 10 วิ ข้ามไปเลย)
+    for i in range(start_idx, 12):
         wait_and_click(device, f"play{i}.bmp", timeout=C.PLAY_STEP_TIMEOUT, required=False, post_delay=1.5)
 
     # หลัง play11 → พิมพ์ชื่อ config + Enter
