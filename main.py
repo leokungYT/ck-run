@@ -1245,21 +1245,4 @@ def main():
 
 
 if __name__ == "__main__":
-    import argparse
-    parser = argparse.ArgumentParser(description="Cookie Run bot")
-    parser.add_argument("--cli", action="store_true",
-                        help="รันแบบ console ไม่เปิด UI (อ่าน configmain.json แล้วเริ่มเลย)")
-    cli_args = parser.parse_args()
-
-    if cli_args.cli:
-        main()
-    else:
-        # default: เปิด UI (gui.py). ถ้าเปิดไม่ได้ → fallback เป็น CLI
-        try:
-            import gui
-            gui.launch()
-        except SystemExit:
-            raise
-        except Exception as e:
-            print(f"{Fore.YELLOW}[GUI] เปิด UI ไม่ได้: {e} → รันแบบ CLI แทน{Style.RESET_ALL}")
-            main()
+    main()
