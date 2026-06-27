@@ -9,5 +9,6 @@
     "get_pet": 0
   },
   "event_rounds": 3,
-  "config_name": "ozx"
+  "config_name": "ozx",
+  "split_by_count": 0
 }

@@ -41,10 +41,17 @@ STEPS = {
 RUBY_REGION = (272, 12, 59, 31)   # (x, y, w, h) ตำแหน่งเลขบนจอ
 RUBY_CHECK_TIMEOUT = 10           # รอ checkpoint-ruby.bmp โผล่กี่วิ (ไม่เจอ → ข้าม)
 
+# ── แยกไฟล์ backup ตามจำนวนชิ้นที่เจอ (find-1 / find-2 / find-3 ...) ──
+# นับจากจำนวนของที่ถูกจดในชื่อไฟล์ (รวม get-item + get-pet)
+#   0 = เก็บรวมใน backup/ (เดิม)
+#   1 = แยกใส่ backup/find-N/  (N = จำนวนชิ้น เช่น เจอ 2 ชิ้น → backup/find-2/)
+SPLIT_BACKUP_BY_COUNT = 0
+
 # ── Timeout (วินาที) ─────────────────────────────────────────────────
-APPEAR_TIMEOUT = 10     # รอรูปโผล่ครั้งแรก (event-back / git-item / ok-gifitem)
-ABSENT_SECS = 5         # กดรัวๆ จนไม่เจอรูปครบกี่วิ ถึงไปต่อ
+APPEAR_TIMEOUT = 4      # รอรูปโผล่ครั้งแรก (event-back / git-item / ok-gifitem) — ลดจาก 10
+ABSENT_SECS = 3         # กดรัวๆ จนไม่เจอรูปครบกี่วิ ถึงไปต่อ — ลดจาก 5
 PLAY6_TIMEOUT = 15      # play6 ถ้าไม่เจอใน 15 วิ ให้ข้าม
+PLAY_STEP_TIMEOUT = 10  # play2-5 / play7-11 ถ้าไม่เจอใน 10 วิ ให้ข้าม (กันค้างรอ 60 วิ)
 DEFAULT_WAIT = 60       # รอ template ปกติสูงสุดกี่วิ
 LOOP_MAX_SECS = 120     # safety cap ของลูป item/pet (กันลูปค้างไม่จบ)
 ITEM3_TIMEOUT = 15      # ในลูป get-item ถ้าไม่เจอปุ่ม item3 ครบกี่วิ ให้จบลูป

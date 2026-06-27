@@ -48,6 +48,7 @@ RUNTIME = {
     "steps": dict(C.STEPS),
     "event_rounds": C.EVENT_LOOP_ROUNDS,
     "config_name": C.CUSTOM_CONFIG_NAME,
+    "split_by_count": C.SPLIT_BACKUP_BY_COUNT,
 }
 
 # สถิติ (ให้ GUI อ่านไปแสดง)
@@ -61,6 +62,7 @@ def load_runtime_config():
     steps = dict(C.STEPS)
     event_rounds = C.EVENT_LOOP_ROUNDS
     config_name = C.CUSTOM_CONFIG_NAME
+    split_by_count = C.SPLIT_BACKUP_BY_COUNT
     try:
         if os.path.exists(CONFIGMAIN_FILE):
             with open(CONFIGMAIN_FILE, "r", encoding="utf-8") as f:
@@ -71,24 +73,28 @@ def load_runtime_config():
                     steps[key] = 1 if v else 0
             event_rounds = int(loaded.get("event_rounds", event_rounds))
             config_name = str(loaded.get("config_name", config_name)).strip() or config_name
+            split_by_count = 1 if loaded.get("split_by_count", split_by_count) else 0
             print(f"{Fore.GREEN}[CONFIG] โหลด {os.path.basename(CONFIGMAIN_FILE)} แล้ว{Style.RESET_ALL}")
     except Exception as e:
         print(f"{Fore.YELLOW}[CONFIG] อ่าน configmain.json ไม่ได้: {e} → ใช้ค่า default{Style.RESET_ALL}")
-    RUNTIME = {"steps": steps, "event_rounds": event_rounds, "config_name": config_name}
+    RUNTIME = {"steps": steps, "event_rounds": event_rounds, "config_name": config_name,
+               "split_by_count": split_by_count}
     # push ค่าเข้า C เพื่อให้โค้ดเดิม (run_play_sequence / run_event_loops) ใช้ได้ทันที
     C.EVENT_LOOP_ROUNDS = event_rounds
     C.CUSTOM_CONFIG_NAME = config_name
+    C.SPLIT_BACKUP_BY_COUNT = split_by_count
     enabled = [k for k, v in steps.items() if v]
     print(f"{Fore.CYAN}[CONFIG] step ที่เปิด: {enabled} | event_rounds={event_rounds} | config_name='{config_name}'{Style.RESET_ALL}")
     return RUNTIME
 
 
-def save_runtime_config(steps=None, event_rounds=None, config_name=None):
+def save_runtime_config(steps=None, event_rounds=None, config_name=None, split_by_count=None):
     """เซฟ configmain.json (เรียกจาก GUI) แล้วคืน dict ที่เซฟ"""
     data = {
         "steps": steps if steps is not None else RUNTIME["steps"],
         "event_rounds": event_rounds if event_rounds is not None else RUNTIME["event_rounds"],
         "config_name": config_name if config_name is not None else RUNTIME["config_name"],
+        "split_by_count": split_by_count if split_by_count is not None else RUNTIME.get("split_by_count", 0),
     }
     with open(CONFIGMAIN_FILE, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
@@ -643,22 +649,26 @@ def extract_member_id(xml_path):
     return None
 
 
-def reserve_zip_path(zip_name):
+def reserve_zip_path(zip_name, subdir=None):
     """หาชื่อ zip ที่ว่าง: <name>.zip, <name>_2.zip, <name>_3.zip ...
-    แล้วจองชื่อทันที (สร้างไฟล์เปล่า) แบบ atomic กันหลาย thread ได้ชื่อชนกัน"""
+    แล้วจองชื่อทันที (สร้างไฟล์เปล่า) แบบ atomic กันหลาย thread ได้ชื่อชนกัน
+    subdir = โฟลเดอร์ย่อยใน backup/ (เช่น 'find-2') ถ้า None = เก็บใน backup/ ตรงๆ"""
     with _backup_name_lock:
-        path = os.path.join(C.BACKUP_DIR, f"{zip_name}.zip")
+        out_dir = os.path.join(C.BACKUP_DIR, subdir) if subdir else C.BACKUP_DIR
+        os.makedirs(out_dir, exist_ok=True)
+        path = os.path.join(out_dir, f"{zip_name}.zip")
         i = 2
         while os.path.exists(path):
-            path = os.path.join(C.BACKUP_DIR, f"{zip_name}_{i}.zip")
+            path = os.path.join(out_dir, f"{zip_name}_{i}.zip")
             i += 1
         open(path, "wb").close()   # จองชื่อไว้ก่อน
         return path
 
 
-def export_backup_zip(device, zip_name, ruby=None):
-    """ดึง shared_prefs + files ทั้งหมด แล้ว zip เก็บไว้ใน backup/<zip_name>.zip
-    ถ้ามี ruby (เลขจาก check-ruby) จะต่อท้ายเป็น [ruby] เช่น name+[ID]+[315].zip"""
+def export_backup_zip(device, zip_name, ruby=None, subdir=None):
+    """ดึง shared_prefs + files ทั้งหมด แล้ว zip เก็บไว้ใน backup/<subdir>/<zip_name>.zip
+    ถ้ามี ruby (เลขจาก check-ruby) จะต่อท้ายเป็น [ruby] เช่น name+[ID]+[315].zip
+    subdir = โฟลเดอร์ย่อย (เช่น 'find-2') ถ้า None = เก็บใน backup/ ตรงๆ"""
     serial = device.serial
     safe = serial.replace(".", "_").replace(":", "_")
     tmp_dir = os.path.join(C.BACKUP_DIR, f"_tmp_{safe}")
@@ -701,7 +711,7 @@ def export_backup_zip(device, zip_name, ruby=None):
         log(serial, f"  ruby = {ruby}", Fore.GREEN)
 
     # ตั้งชื่อสะอาด: <name>.zip, <name>_2.zip ... (atomic กัน thread ชนกัน)
-    zip_path = reserve_zip_path(zip_name)
+    zip_path = reserve_zip_path(zip_name, subdir)
     with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
         for local, arc in pulled:
             zf.write(local, arc)
@@ -752,16 +762,16 @@ def run_play_sequence(device):
     wait_and_click(device, "play1.bmp", post_delay=2.0)
     click_fixed(device, 419, 282, "(หลัง play1)", post_delay=2.0)
 
-    # play2 → play6 (play6 มี timeout 15s)
+    # play2 → play6 (play6 มี timeout 15s, ที่เหลือ 10s แล้วข้าม)
     for i in range(2, 7):
         if i == 6:
             wait_and_click(device, "play6.bmp", timeout=C.PLAY6_TIMEOUT, required=False, post_delay=1.5)
         else:
-            wait_and_click(device, f"play{i}.bmp", post_delay=1.5)
+            wait_and_click(device, f"play{i}.bmp", timeout=C.PLAY_STEP_TIMEOUT, required=False, post_delay=1.5)
 
-    # play7 → play11
+    # play7 → play11 (ไม่เจอใน 10 วิ ข้ามไปเลย กันค้างรอ 60 วิ)
     for i in range(7, 12):
-        wait_and_click(device, f"play{i}.bmp", post_delay=1.5)
+        wait_and_click(device, f"play{i}.bmp", timeout=C.PLAY_STEP_TIMEOUT, required=False, post_delay=1.5)
 
     # หลัง play11 → พิมพ์ชื่อ config + Enter
     log(serial, f"พิมพ์ชื่อ config: {C.CUSTOM_CONFIG_NAME}", Fore.GREEN)
@@ -1000,8 +1010,14 @@ def finalize_cycle(device, found, ruby=None):
                 + (f" | ruby={ruby}" if ruby else ""), Fore.MAGENTA)
 
     if zip_name:
+        # แยกโฟลเดอร์ตามจำนวนชิ้นที่จด (find-1 / find-2 / ...) ถ้าเปิด option
+        subdir = None
+        if C.SPLIT_BACKUP_BY_COUNT:
+            count = len(zip_name.split("+"))
+            subdir = f"find-{count}"
+            log(serial, f"แยกเก็บโฟลเดอร์: backup/{subdir}/ ({count} ชิ้น)", Fore.CYAN)
         log(serial, f"จะ backup ในชื่อ: {zip_name}.zip", Fore.GREEN)
-        export_backup_zip(device, zip_name, ruby)
+        export_backup_zip(device, zip_name, ruby, subdir)
         with STATS_LOCK:
             STATS["backups"] += 1
             for n in found:

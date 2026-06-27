@@ -106,6 +106,11 @@ class App(ctk.CTk):
         self.ent_cfgname.insert(0, str(self.rt["config_name"]))
         self.ent_cfgname.pack(side="left", padx=8)
 
+        # แยกไฟล์ backup ตามจำนวนชิ้นที่เจอ (find-1 / find-2 / ...)
+        self.split_var = ctk.BooleanVar(value=bool(self.rt.get("split_by_count", 0)))
+        ctk.CTkSwitch(body, text="📂 แยก backup ตามจำนวนที่เจอ (find-1 / find-2 / find-3 ...)",
+                      variable=self.split_var).pack(anchor="w", padx=8, pady=(8, 2))
+
         btnrow = ctk.CTkFrame(body, fg_color="transparent")
         btnrow.pack(anchor="w", pady=12)
         ctk.CTkButton(btnrow, text="💾 บันทึก Config", fg_color="#2cc985",
@@ -120,19 +125,14 @@ class App(ctk.CTk):
         self.found_box.pack(fill="x")
         self.found_box.configure(state="disabled")
 
-        # Log
-        self.log_box = ctk.CTkTextbox(self, height=110,
-                                      font=ctk.CTkFont(family="Consolas", size=11),
-                                      fg_color="#1e1e1e", text_color="#8b949e")
-        self.log_box.pack(fill="x", padx=12, pady=(0, 10))
-        self.log_box.configure(state="disabled")
-
     # ── helpers ───────────────────────────────────────────────────────
     def _log(self, msg):
-        self.log_box.configure(state="normal")
-        self.log_box.insert("end", time.strftime("[%H:%M:%S] ") + msg + "\n")
-        self.log_box.see("end")
-        self.log_box.configure(state="disabled")
+        # พิมพ์ลง console เท่านั้น — ไม่เขียน widget จาก background thread
+        # (Tkinter ไม่ thread-safe → เคยทำให้ GUI ค้าง Not Responding)
+        try:
+            print(time.strftime("[%H:%M:%S] ") + msg)
+        except Exception:
+            pass
 
     def _collect(self):
         steps = {k: (1 if v.get() else 0) for k, v in self.step_vars.items()}
@@ -141,11 +141,12 @@ class App(ctk.CTk):
         except ValueError:
             rounds = self.rt["event_rounds"]
         name = self.ent_cfgname.get().strip() or self.rt["config_name"]
-        return steps, rounds, name
+        split = 1 if self.split_var.get() else 0
+        return steps, rounds, name, split
 
     def _save_to_disk(self):
-        steps, rounds, name = self._collect()
-        M.save_runtime_config(steps, rounds, name)
+        steps, rounds, name, split = self._collect()
+        M.save_runtime_config(steps, rounds, name, split)
         M.load_runtime_config()      # reload → push เข้า main.RUNTIME / C
         self.rt = M.RUNTIME
 
@@ -166,6 +167,7 @@ class App(ctk.CTk):
         self.ent_rounds.insert(0, str(self.rt["event_rounds"]))
         self.ent_cfgname.delete(0, "end")
         self.ent_cfgname.insert(0, str(self.rt["config_name"]))
+        self.split_var.set(bool(self.rt.get("split_by_count", 0)))
         enabled = [k for k, v in steps.items() if v]
         self._log(f"โหลด configmain.json ใหม่ → step ที่เปิด: {enabled}")
 
