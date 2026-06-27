@@ -74,10 +74,29 @@ ITEM_GET_MAP = {
     "item1.bmp": "backpack",
     "item2.bmp": "headking",
     "item3.bmp": "banana",
-    "item4.bmp": "kapok"
+    "item4.bmp": "kapok",
+    "item5.bmp": "sword",
+    "item6.bmp": "blueberry-horse",
+    "item7.bmp": "water-pendant",
+    "item8.bmp": "sweet-donut",
+    "item9.bmp": "lip-balm",
+    "item10.bmp": "muffin",
+    "item11.bmp": "melody-guitar",
+    "item12.bmp": "golden-wreath",
+    "item13.bmp": "chilled-moon",
+    "item14.bmp": "rainbow-drink",
+    "item15.bmp": "mini-safe",
+    "item16.bmp": "mushroom-drink",
+    "item17.bmp": "energy-drink",
+    "item18.bmp": "first-backpack",
+    "item19.bmp": "sour-soda",
 }
 PET_GET_MAP = {
     "pet-item.bmp": "trader",
+    "pet-item2.bmp": "coin-scale",
+    "pet-item3.bmp": "chronicles,",
+    "pet-item4.bmp": "do-re-mi",
+    "pet-item5.bmp": "banana-lion"
 }
 
 # ── ของที่ "เจอเดี่ยวๆ ไม่ต้องจด" ────────────────────────────────────
@@ -87,7 +106,26 @@ PET_GET_MAP = {
 RECORD_ALONE = {
     "banana": False,
     "backpack": False,
-    "kapok": False
+    "kapok": False,
+    "sword": False,
+    "blueberry-horse": False,
+    "water-pendant": False,
+    "sweet-donut": False,
+    "lip-balm": False,
+    "muffin": False,
+    "melody-guitar": False,
+    "golden-wreath": False,
+    "chilled-moon": False,
+    "rainbow-drink": False,
+    "mini-safe": False,
+    "mushroom-drink": False,
+    "energy-drink": False,
+    "first-backpack": False,
+    "sour-soda": False,
+    "coin-scale": False,
+    "chronicles": False,
+    "do-re-mi": False,
+    "banana-lion": False,
 }
 
 # ── เปิด/ปิด root ─────────────────────────────────────────────────────
