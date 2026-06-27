@@ -829,41 +829,6 @@ def decide_zip_name(found):
     return None
 
 
-# ═══════════════════════════════════════════════════════════════════
-#  STEP: play sequence
-# ═══════════════════════════════════════════════════════════════════
-def _wait_and_click_or_play8(device, name, timeout, required=False, post_delay=1.5):
-    """รอ template `name` แต่ถ้าเจอ play8 ก่อน → คลิก play8 แล้วคืน 'play8'
-    คืน: 'target' = เจอ name, 'play8' = เจอ play8 ก่อน, None = timeout"""
-    path_target = img_path(name)
-    path_play8 = img_path("play8.bmp")
-    start = time.time()
-    while time.time() - start < timeout:
-        if not bot_running:
-            return None
-        img = fast_screencap(device)
-        # เช็ค play8 ก่อนเสมอ (priority สูง)
-        pts8 = ImgSearchADB(img, path_play8)
-        if pts8:
-            x, y = pts8[0]
-            log(device.serial, f"⚡ เจอ play8 ระหว่างรอ {name} → คลิก play8 ({x},{y})", Fore.YELLOW)
-            tap(device, x, y)
-            time.sleep(post_delay)
-            return "play8"
-        # เช็ค target ปกติ
-        pts = ImgSearchADB(img, path_target)
-        if pts:
-            x, y = pts[0]
-            log(device.serial, f"คลิก {name} ที่ ({x},{y})")
-            tap(device, x, y)
-            time.sleep(post_delay)
-            return "target"
-        time.sleep(0.3)
-    if required:
-        log(device.serial, f"⏰ timeout: ไม่เจอ {name} ใน {timeout}s", Fore.YELLOW)
-    return None
-
-
 def run_play_sequence(device):
     serial = device.serial
     log(serial, "=== PLAY SEQUENCE ===", Fore.GREEN)
@@ -872,28 +837,27 @@ def run_play_sequence(device):
     wait_and_click(device, "play1.bmp", post_delay=2.0)
     click_fixed(device, 419, 282, "(หลัง play1)", post_delay=2.0)
 
-    # play2 → play11: ทุก step เช็ค play8 ควบคู่ไปด้วย
-    # ถ้าเจอ play8 ตรงไหน → กระโดดไป play9 ทันที
-    # ถ้าเจอ play8 อีกรอบ (เช่น ระหว่าง play9-11) → เริ่มจาก play8 ใหม่อีกครั้ง
+    # play2 → play11: ทุก step เช็ค play8 ควบคู่ด้วย
+    # เจอ play8 ตรงไหน → คลิกแล้วกระโดดไป play9
+    # เจอ play8 อีกรอบ → กลับมาเริ่ม play9 ใหม่
     i = 2
     while i <= 11:
         if not bot_running:
             return
         name = f"play{i}.bmp"
 
-        # play8 เอง ไม่ต้องเช็ค play8 ซ้ำ ให้กดตามปกติ
+        # play8 เอง → กดตามปกติ ไม่ต้องเช็คซ้ำ
         if i == 8:
             wait_and_click(device, name, timeout=C.PLAY_STEP_TIMEOUT, required=False, post_delay=1.5)
             i += 1
             continue
 
-        # play6 มี timeout พิเศษ
         t = C.PLAY6_TIMEOUT if i == 6 else C.PLAY_STEP_TIMEOUT
 
-        result = _wait_and_click_or_play8(device, name, timeout=t, required=False, post_delay=1.5)
-        if result == "play8":
-            # เจอ play8 (กดไปแล้ว) → กระโดดไป play9
-            log(serial, f"play8 โผล่ตอน step play{i} → ข้ามไป play9", Fore.YELLOW)
+        clicked = wait_and_click_first(device, [name, "play8.bmp"],
+                                       timeout=t, post_delay=1.5)
+        if clicked == "play8.bmp":
+            # เจอ play8 (คลิกไปแล้ว) → กระโดดไป play9
             i = 9
         else:
             # เจอ target หรือ timeout → ไปตัวถัดไป
