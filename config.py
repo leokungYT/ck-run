@@ -74,6 +74,7 @@ ITEM_GET_MAP = {
     "item1.bmp": "backpack",
     "item2.bmp": "headking",
     "item3.bmp": "banana",
+    "item4.bmp": "kapok"
 }
 PET_GET_MAP = {
     "pet-item.bmp": "trader",
@@ -86,6 +87,7 @@ PET_GET_MAP = {
 RECORD_ALONE = {
     "banana": False,
     "backpack": False,
+    "kapok": False
 }
 
 # ── เปิด/ปิด root ─────────────────────────────────────────────────────

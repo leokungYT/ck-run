@@ -837,31 +837,16 @@ def run_play_sequence(device):
     wait_and_click(device, "play1.bmp", post_delay=2.0)
     click_fixed(device, 419, 282, "(หลัง play1)", post_delay=2.0)
 
-    # play2 → play11: ทุก step เช็ค play8 ควบคู่ด้วย
-    # เจอ play8 ตรงไหน → คลิกแล้วกระโดดไป play9
-    # เจอ play8 อีกรอบ → กลับมาเริ่ม play9 ใหม่
-    i = 2
-    while i <= 11:
-        if not bot_running:
-            return
-        name = f"play{i}.bmp"
-
-        # play8 เอง → กดตามปกติ ไม่ต้องเช็คซ้ำ
-        if i == 8:
-            wait_and_click(device, name, timeout=C.PLAY_STEP_TIMEOUT, required=False, post_delay=1.5)
-            i += 1
-            continue
-
-        t = C.PLAY6_TIMEOUT if i == 6 else C.PLAY_STEP_TIMEOUT
-
-        clicked = wait_and_click_first(device, [name, "play8.bmp"],
-                                       timeout=t, post_delay=1.5)
-        if clicked == "play8.bmp":
-            # เจอ play8 (คลิกไปแล้ว) → กระโดดไป play9
-            i = 9
+    # play2 → play6 (play6 มี timeout 15s)
+    for i in range(2, 7):
+        if i == 6:
+            wait_and_click(device, "play6.bmp", timeout=C.PLAY6_TIMEOUT, required=False, post_delay=1.5)
         else:
-            # เจอ target หรือ timeout → ไปตัวถัดไป
-            i += 1
+            wait_and_click(device, f"play{i}.bmp", post_delay=1.5)
+
+    # play7 → play11
+    for i in range(7, 12):
+        wait_and_click(device, f"play{i}.bmp", post_delay=1.5)
 
     # หลัง play11 → พิมพ์ชื่อ config + Enter
     log(serial, f"พิมพ์ชื่อ config: {C.CUSTOM_CONFIG_NAME}", Fore.GREEN)
