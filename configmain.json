@@ -10,5 +10,5 @@
   },
   "event_rounds": 3,
   "config_name": "ozx",
-  "split_by_count": 0
+  "split_by_count": 1
 }

@@ -232,6 +232,7 @@ class App(ctk.CTk):
 
 def launch():
     """เปิดหน้าต่าง UI (เรียกจาก main.py ได้ด้วย)"""
+    M.set_process_priority()   # ลด priority กัน UI/Explorer ค้างตอนบอทกิน CPU
     ctk.set_appearance_mode("Dark")
     ctk.set_default_color_theme("blue")
     App().mainloop()

@@ -106,6 +106,46 @@ def step_on(name):
     return bool(RUNTIME.get("steps", {}).get(name, 1))
 
 
+_priority_set = False
+
+
+def set_process_priority():
+    """ลด priority ของ process ลง (BELOW_NORMAL) กันบอทแย่ง CPU จน UI/Explorer ค้าง.
+    เรียกครั้งเดียวพอ (idempotent)"""
+    global _priority_set
+    if _priority_set or not getattr(C, "LOW_PRIORITY", 1):
+        return
+    _priority_set = True
+
+    # 1) psutil (ชัวร์สุด ข้ามเรื่อง signature)
+    try:
+        import psutil
+        p = psutil.Process()
+        if os.name == "nt":
+            p.nice(psutil.BELOW_NORMAL_PRIORITY_CLASS)
+        else:
+            p.nice(10)
+        print(f"{Fore.CYAN}[PERF] process priority = BELOW_NORMAL (กัน UI/Explorer ค้าง){Style.RESET_ALL}")
+        return
+    except Exception:
+        pass
+
+    # 2) fallback: ctypes (ตั้ง signature ให้ถูกสำหรับ 64-bit)
+    try:
+        if os.name == "nt":
+            import ctypes
+            k32 = ctypes.windll.kernel32
+            k32.GetCurrentProcess.restype = ctypes.c_void_p
+            k32.SetPriorityClass.argtypes = [ctypes.c_void_p, ctypes.c_uint]
+            BELOW_NORMAL_PRIORITY_CLASS = 0x00004000
+            if k32.SetPriorityClass(k32.GetCurrentProcess(), BELOW_NORMAL_PRIORITY_CLASS):
+                print(f"{Fore.CYAN}[PERF] process priority = BELOW_NORMAL (กัน UI/Explorer ค้าง){Style.RESET_ALL}")
+        else:
+            os.nice(10)
+    except Exception as e:
+        print(f"{Fore.YELLOW}[PERF] set priority error: {e}{Style.RESET_ALL}")
+
+
 def log(serial, msg, color=Fore.CYAN):
     try:
         print(f"{color}[{serial}] {msg}{Style.RESET_ALL}")
@@ -1148,6 +1188,7 @@ def discover_devices():
 def main():
     global bot_running
     load_runtime_config()
+    set_process_priority()
     if not find_adb_executable():
         print(f"{Fore.RED}[ERROR] ไม่เจอ adb.exe{Style.RESET_ALL}")
         return
