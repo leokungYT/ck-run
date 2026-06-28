@@ -164,26 +164,6 @@ def _trim_working_set():
         pass
 
 
-_ram_trimmer_started = False
-
-
-def start_ram_trimmer():
-    """รัน thread เคลียร์ RAM เป็นระยะ (กัน RAM บวมตอนรันยาวๆ). idempotent"""
-    global _ram_trimmer_started
-    interval = getattr(C, "RAM_TRIM_INTERVAL", 0)
-    if _ram_trimmer_started or not interval or interval <= 0:
-        return
-    _ram_trimmer_started = True
-
-    def _loop():
-        while True:
-            time.sleep(interval)
-            _trim_working_set()
-
-    threading.Thread(target=_loop, daemon=True).start()
-    print(f"{Fore.CYAN}[PERF] RAM trimmer เปิด (เคลียร์ทุก {interval}s){Style.RESET_ALL}")
-
-
 def log(serial, msg, color=Fore.CYAN):
     try:
         print(f"{color}[{serial}] {msg}{Style.RESET_ALL}")
@@ -301,38 +281,8 @@ def fast_screencap(device):
         time.sleep(wait)
     _LAST_SCREENCAP_TS[serial] = time.time()
 
-    conn = None
-    try:
-        conn = device.client.create_connection(timeout=getattr(C, "ADB_TIMEOUT", 15))
-        conn.send(f"host:transport:{device.serial}")
-        conn.check_status()
-        conn.send("shell:screencap")
-        conn.check_status()
-        raw = conn.read_all()
-        if len(raw) > 16:
-            w = int.from_bytes(raw[0:4], 'little')
-            h = int.from_bytes(raw[4:8], 'little')
-            expected = w * h * 4
-            # header อาจ 12 ไบต์ (เก่า) หรือ 16 ไบต์ (Android 12+ มี colorspace)
-            # คำนวณจากความยาวจริง = ปลอดภัยกว่าการ fix ที่ 12 (กันภาพเพี้ยน)
-            hdr = len(raw) - expected
-            if hdr in (12, 16) and 0 < w < 10000 and 0 < h < 10000:
-                gray = cv2.cvtColor(
-                    np.frombuffer(raw, dtype=np.uint8, offset=hdr, count=expected).reshape((h, w, 4)),
-                    cv2.COLOR_RGBA2GRAY)
-                if SCREENCAP_SCALE != 1.0:
-                    gray = cv2.resize(gray, (int(w * SCREENCAP_SCALE), int(h * SCREENCAP_SCALE)),
-                                      interpolation=cv2.INTER_LINEAR)
-                return gray
-    except Exception:
-        pass
-    finally:
-        if conn is not None:
-            try:
-                conn.close()
-            except Exception:
-                pass
-    # Fallback PNG
+    # PNG screencap (เหมือนเดิม — เล็กกว่า raw เลยเร็วกว่าตอนหลายจอ)
+    # bounded ด้วย ADB_TIMEOUT ผ่าน create_connection ที่ patch ไว้ → ไม่ค้างถาวร
     try:
         raw = device.screencap()
         if raw:
@@ -1160,8 +1110,7 @@ def finalize_cycle(device, found, ruby=None):
 # ═══════════════════════════════════════════════════════════════════
 def process_device(serial_or_device):
     serial = serial_or_device.serial if hasattr(serial_or_device, 'serial') else str(serial_or_device)
-    set_process_priority()   # idempotent — เผื่อถูกเรียกจาก launcher อื่นที่ไม่ผ่าน main()
-    start_ram_trimmer()
+    set_process_priority()   # idempotent — no-op ถ้า LOW_PRIORITY=0
     client = AdbClient(host="127.0.0.1", port=5037)
     # บังคับให้ทุก connection (shell/tap/screencap) มี timeout เสมอ
     # ไม่งั้น adb ตอบช้า/ค้าง = thread block ตลอดกาล (CPU ว่างแต่ค้าง)
@@ -1229,9 +1178,9 @@ def process_device(serial_or_device):
             finalize_cycle(device, found, ruby)
             device = disable_root(device)
 
-            # คืน memory ที่ค้างจากรอบนี้ (กัน RAM บวมตอนรันยาวๆ หลายจอ)
+            # เคลียร์ RAM ที่ขอบรอบ (เกมปิดอยู่ → ปลอดภัย ไม่กระตุกระหว่างทำงาน)
             if getattr(C, "GC_EACH_CYCLE", 1):
-                gc.collect()
+                _trim_working_set()   # gc.collect() + คืน working set ให้ระบบ
 
             log(device.serial, "จบรอบ → เริ่มใหม่", Fore.GREEN)
             time.sleep(3)
@@ -1284,7 +1233,6 @@ def main():
     global bot_running
     load_runtime_config()
     set_process_priority()
-    start_ram_trimmer()
     if not find_adb_executable():
         print(f"{Fore.RED}[ERROR] ไม่เจอ adb.exe{Style.RESET_ALL}")
         return

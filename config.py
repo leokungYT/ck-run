@@ -49,9 +49,9 @@ SPLIT_BACKUP_BY_COUNT = 0
 
 # ── Performance: ลด priority ของ process กัน UI/Explorer ค้าง ──────────
 # รันหลายจอ cv2 จะกิน CPU จนเต็ม ทำให้ Windows Explorer/หน้าต่างอื่นค้าง
-#   1 = ตั้ง process เป็น BELOW_NORMAL (บอทสละ CPU ให้ UI, ช้าลงเล็กน้อย)
-#   0 = ปกติ
-LOW_PRIORITY = 1
+#   1 = ตั้ง process เป็น BELOW_NORMAL (บอทสละ CPU ให้ UI, แต่บอท "ช้าลง")
+#   0 = ปกติ (เร็วสุด) ← แนะนำ เพราะแก้อาการค้างด้วย ADB timeout ไปแล้ว
+LOW_PRIORITY = 0
 
 # ── ปรับความลื่นเมื่อรันหลายจอ (16+ จอ) ───────────────────────────────
 # ย่อภาพก่อน match → matchTemplate เร็วขึ้นมาก (กิน CPU/RAM น้อยลง)
@@ -63,10 +63,9 @@ SCREENCAP_SCALE = 1.0
 MIN_SCREENCAP_INTERVAL = 0.033
 # ลูปหาปุ่ม sleep แต่ละรอบ (วินาที) — ต่ำ = กดไวขึ้น (เจอ→กดทันที)
 POLL_INTERVAL = 0.033
-# เรียก gc.collect() ตอนจบแต่ละรอบ กัน memory บวมตอนรันยาวๆ  (1=เปิด, 0=ปิด)
+# เคลียร์ RAM ตอนจบแต่ละรอบ (gc.collect + trim working set) — ทำที่ขอบรอบ
+# ตอนเกมถูกปิดอยู่แล้ว ปลอดภัย ไม่กระตุกระหว่างทำงาน  (1=เปิด, 0=ปิด)
 GC_EACH_CYCLE = 1
-# เคลียร์ RAM (trim working set ของ process) ทุกกี่วินาที กัน RAM บวมรันยาว  (0=ปิด)
-RAM_TRIM_INTERVAL = 60
 
 # ── ADB timeout (สำคัญมากเมื่อรันหลายจอ) ─────────────────────────────
 # ทุกคำสั่ง adb (screencap/shell/tap) จะรอไม่เกินกี่วินาที ถ้าเกิน = ตัดทิ้งลองใหม่
