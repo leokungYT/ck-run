@@ -12,7 +12,6 @@ import shutil
 import zipfile
 import json
 import re
-import gc
 import concurrent.futures
 from ppadb.client import Client as AdbClient
 from colorama import Fore, Style, init
@@ -29,7 +28,7 @@ import config as C
 adb_path = "adb"
 bot_running = False
 
-SCREENCAP_SCALE = getattr(C, "SCREENCAP_SCALE", 1.0)   # ย่อภาพก่อน match (ตั้งใน config.py)
+SCREENCAP_SCALE = 1.0           # ไม่ย่อภาพ → coordinate ตรงกับ template เดิม
 IMAGE_CACHE = {}
 _image_cache_lock = threading.Lock()
 
@@ -147,59 +146,6 @@ def set_process_priority():
         print(f"{Fore.YELLOW}[PERF] set priority error: {e}{Style.RESET_ALL}")
 
 
-def _keep_resident():
-    """บังคับ Windows ให้เก็บ working set ของ process ไว้ใน RAM (ไม่ page out)
-    = ใช้ RAM เป็นหลัก → ไม่มี page-in สะดุด (เหมาะเครื่อง RAM เยอะ)"""
-    try:
-        if os.name == "nt":
-            import ctypes
-            from ctypes import wintypes
-            k32 = ctypes.windll.kernel32
-            k32.GetCurrentProcess.restype = ctypes.c_void_p
-            k32.SetProcessWorkingSetSizeEx.argtypes = [ctypes.c_void_p, ctypes.c_size_t,
-                                                       ctypes.c_size_t, wintypes.DWORD]
-            QUOTA_LIMITS_HARDWS_MIN_ENABLE = 0x00000001   # บังคับ min (ค้างใน RAM)
-            QUOTA_LIMITS_HARDWS_MAX_DISABLE = 0x00000008  # ไม่จำกัด max (โตได้)
-            mb = int(getattr(C, "RAM_RESIDENT_MIN_MB", 512))
-            mn = ctypes.c_size_t(mb * 1024 * 1024)
-            mx = ctypes.c_size_t(mb * 8 * 1024 * 1024)
-            return bool(k32.SetProcessWorkingSetSizeEx(
-                k32.GetCurrentProcess(), mn, mx,
-                QUOTA_LIMITS_HARDWS_MIN_ENABLE | QUOTA_LIMITS_HARDWS_MAX_DISABLE))
-    except Exception:
-        pass
-    return False
-
-
-def preload_templates():
-    """โหลดรูป template ทั้งหมดใน img/ เข้า RAM ล่วงหน้า (กัน lazy-read ตอนรัน)"""
-    n = 0
-    try:
-        for root, _dirs, files in os.walk(C.IMG_DIR):
-            for f in files:
-                if f.lower().endswith((".bmp", ".png")):
-                    if load_template(os.path.join(root, f)) is not None:
-                        n += 1
-    except Exception:
-        pass
-    return n
-
-
-_ram_first_done = False
-
-
-def setup_ram_first():
-    """ใช้ RAM เป็นหลัก: preload รูปเข้า RAM + บังคับ resident. idempotent"""
-    global _ram_first_done
-    if _ram_first_done or not getattr(C, "USE_RAM_FIRST", 1):
-        return
-    _ram_first_done = True
-    n = preload_templates()
-    resident = _keep_resident()
-    print(f"{Fore.CYAN}[RAM] ใช้ RAM เป็นหลัก — preload {n} รูปเข้า RAM"
-          f"{' + keep-resident ON' if resident else ''}{Style.RESET_ALL}")
-
-
 def log(serial, msg, color=Fore.CYAN):
     try:
         print(f"{color}[{serial}] {msg}{Style.RESET_ALL}")
@@ -304,29 +250,47 @@ def get_connected_devices():
 # ═══════════════════════════════════════════════════════════════════
 #  Screencap + Image search  (วิธีเดียวกับ pes/main-pes.py)
 # ═══════════════════════════════════════════════════════════════════
-_MIN_SCREENCAP_INTERVAL = getattr(C, "MIN_SCREENCAP_INTERVAL", 0.25)
-_POLL_INTERVAL = getattr(C, "POLL_INTERVAL", 0.05)
+_MIN_SCREENCAP_INTERVAL = 0.25
 _LAST_SCREENCAP_TS = {}
-_LAST_FIXRUN_TAP = {}   # cooldown กด fix-run ต่อ device
-
-
-class FixLteRestart(BaseException):
-    """raise เมื่อเจอ fixlte.bmp → process_device จะ clear app + ลบไฟล์ + เริ่มรอบใหม่
-    ใช้ BaseException เพื่อให้เด้งทะลุ except Exception ทุกชั้นขึ้นไปถึง process_device แน่นอน"""
-    pass
 
 
 def fast_screencap(device):
-    """Screencap (PNG) → gray + เช็ค fixlte ตลอด (เจอ → raise FixLteRestart)"""
+    """Screencap จาก raw RGBA → gray (เร็วกว่า PNG)"""
     serial = device.serial
     wait = _MIN_SCREENCAP_INTERVAL - (time.time() - _LAST_SCREENCAP_TS.get(serial, 0.0))
     if wait > 0:
         time.sleep(wait)
     _LAST_SCREENCAP_TS[serial] = time.time()
 
-    # PNG screencap (เหมือนเดิม — เล็กกว่า raw เลยเร็วกว่าตอนหลายจอ)
-    # bounded ด้วย ADB_TIMEOUT ผ่าน create_connection ที่ patch ไว้ → ไม่ค้างถาวร
-    gray = None
+    conn = None
+    try:
+        conn = device.client.create_connection(timeout=device.client.timeout)
+        conn.send(f"host:transport:{device.serial}")
+        conn.check_status()
+        conn.send("shell:screencap")
+        conn.check_status()
+        raw = conn.read_all()
+        if len(raw) > 16:
+            w = int.from_bytes(raw[0:4], 'little')
+            h = int.from_bytes(raw[4:8], 'little')
+            expected = w * h * 4
+            if len(raw) >= 12 + expected:
+                gray = cv2.cvtColor(
+                    np.frombuffer(raw, dtype=np.uint8, offset=12, count=expected).reshape((h, w, 4)),
+                    cv2.COLOR_RGBA2GRAY)
+                if SCREENCAP_SCALE != 1.0:
+                    gray = cv2.resize(gray, (int(w * SCREENCAP_SCALE), int(h * SCREENCAP_SCALE)),
+                                      interpolation=cv2.INTER_LINEAR)
+                return gray
+    except Exception:
+        pass
+    finally:
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass
+    # Fallback PNG
     try:
         raw = device.screencap()
         if raw:
@@ -334,31 +298,16 @@ def fast_screencap(device):
             if gray is not None and SCREENCAP_SCALE != 1.0:
                 gray = cv2.resize(gray, None, fx=SCREENCAP_SCALE, fy=SCREENCAP_SCALE,
                                   interpolation=cv2.INTER_LINEAR)
+            return gray
     except Exception:
-        gray = None
-
-    # เช็ค fixlte ตลอดทุกเฟรม (นอก try → FixLteRestart เด้งขึ้นไปได้ ไม่โดนกลืน)
-    if gray is not None and getattr(C, "CHECK_FIXLTE", 1):
-        if ImgSearchADB(gray, img_path("fixlte.bmp")):
-            log(serial, "⚠️ พบ fixlte.bmp!", Fore.YELLOW)
-            raise FixLteRestart()
-
-    # เช็ค fix-run ตลอดทุกเฟรม ทุกที่ → เจอแล้วกดทิ้ง (cooldown 1 วิ/จอ กันกดรัว)
-    if gray is not None and getattr(C, "CHECK_FIX_RUN", 1):
-        fr = ImgSearchADB(gray, img_path("fix-run.bmp"))
-        if fr and (time.time() - _LAST_FIXRUN_TAP.get(serial, 0.0) > 1.0):
-            log(serial, "พบ fix-run → กด", Fore.YELLOW)
-            tap(device, fr[0][0], fr[0][1])
-            _LAST_FIXRUN_TAP[serial] = time.time()
-
-    return gray
+        pass
+    return None
 
 
 def load_template(path):
-    key = os.path.normpath(path)   # normalize → preload & runtime ใช้ key เดียวกัน
     with _image_cache_lock:
-        if key in IMAGE_CACHE:
-            return IMAGE_CACHE[key]
+        if path in IMAGE_CACHE:
+            return IMAGE_CACHE[path]
     t = None
     base, ext = os.path.splitext(path)
     alt = base + (".png" if ext.lower() == ".bmp" else ".bmp")
@@ -372,7 +321,7 @@ def load_template(path):
                            max(1, int(t.shape[0] * SCREENCAP_SCALE))),
                        interpolation=cv2.INTER_LINEAR)
     with _image_cache_lock:
-        IMAGE_CACHE[key] = t
+        IMAGE_CACHE[path] = t
     return t
 
 
@@ -414,11 +363,7 @@ def ImgSearchADB(img, path, threshold=C.MATCH_THRESHOLD):
 
 # ── helper คลิก ──────────────────────────────────────────────────────
 def tap(device, x, y):
-    try:
-        device.shell(f"input swipe {x} {y} {x} {y} 100")
-    except Exception as e:
-        # adb ตอบช้า/timeout → ข้ามการกดนี้ไป (ไม่ให้ค้าง/ล้มทั้งรอบ)
-        log(device.serial, f"tap timeout/err ({x},{y}): {e}", Fore.YELLOW)
+    device.shell(f"input swipe {x} {y} {x} {y} 100")
 
 
 def img_path(name, folder=C.IMG_DIR):
@@ -444,7 +389,7 @@ def wait_and_click(device, name, timeout=C.DEFAULT_WAIT, required=True,
             tap(device, x, y)
             time.sleep(post_delay)
             return True
-        time.sleep(_POLL_INTERVAL)
+        time.sleep(0.3)
     if required:
         log(device.serial, f"⏰ timeout: ไม่เจอ {name} ใน {timeout}s", Fore.YELLOW)
     return False
@@ -468,7 +413,7 @@ def wait_and_click_first(device, names, timeout=C.DEFAULT_WAIT, post_delay=1.0,
                 tap(device, x, y)
                 time.sleep(post_delay)
                 return name
-        time.sleep(_POLL_INTERVAL)
+        time.sleep(0.3)
     return None
 
 
@@ -884,64 +829,6 @@ def decide_zip_name(found):
     return None
 
 
-def run_play8_to_11(device):
-    """play8 → play11 พร้อม watchdog เช็ค play8 ตลอด:
-    ถ้า play8 โผล่ค้างครบ PLAY8_STUCK_TIMEOUT วิ (กดแล้วไม่ไปไหน) → เริ่มจาก play8 ใหม่
-    (redo สูงสุด 5 รอบ กันวนไม่จบ)"""
-    serial = device.serial
-    stuck_sec = getattr(C, "PLAY8_STUCK_TIMEOUT", 15)
-    step_timeout = getattr(C, "PLAY_STEP_TIMEOUT", 10)
-
-    for attempt in range(1, 6):
-        # กด play8
-        wait_and_click(device, "play8.bmp", timeout=step_timeout, required=False, post_delay=1.5)
-
-        # ทำ play9 → play11 พร้อมจับ play8 ค้าง
-        # (fix-run ถูกเช็ค+กดให้ตลอดทุกเฟรมใน fast_screencap แล้ว — global)
-        i = 9
-        play8_since = None
-        step_start = time.time()
-        stuck = False   # True = play8 ค้าง → redo จาก play8
-        while i < 12:
-            if not bot_running:
-                return
-            img = fast_screencap(device)
-            if img is None:
-                time.sleep(_POLL_INTERVAL)
-                continue
-
-            # watchdog: play8 ค้างไหม (เช็คตลอดทุกเฟรม)
-            if ImgSearchADB(img, img_path("play8.bmp")):
-                if play8_since is None:
-                    play8_since = time.time()
-                elif time.time() - play8_since >= stuck_sec:
-                    stuck = True
-                    break
-            else:
-                play8_since = None
-
-            # กด play{i} ถ้าเจอ
-            pts = ImgSearchADB(img, img_path(f"play{i}.bmp"))
-            if pts:
-                tap(device, pts[0][0], pts[0][1])
-                log(serial, f"คลิก play{i}")
-                time.sleep(1.5)
-                i += 1
-                step_start = time.time()
-                play8_since = None
-            elif time.time() - step_start > step_timeout:
-                log(serial, f"ไม่เจอ play{i} ใน {step_timeout}s → ข้าม", Fore.YELLOW)
-                i += 1
-                step_start = time.time()
-            time.sleep(_POLL_INTERVAL)
-
-        if not stuck:
-            return   # play8 → play11 เสร็จ
-        log(serial, f"⚠️ play8 ค้างครบ {stuck_sec} วิ → เริ่มจาก play8 ใหม่ (รอบ {attempt})", Fore.YELLOW)
-
-    log(serial, "redo play8 ครบ 5 รอบยังค้าง → ไปต่อ", Fore.YELLOW)
-
-
 def run_play_sequence(device):
     serial = device.serial
     log(serial, "=== PLAY SEQUENCE ===", Fore.GREEN)
@@ -957,10 +844,9 @@ def run_play_sequence(device):
         else:
             wait_and_click(device, f"play{i}.bmp", post_delay=1.5)
 
-    # play7
-    wait_and_click(device, "play7.bmp", timeout=C.PLAY_STEP_TIMEOUT, required=False, post_delay=1.5)
-    # play8 → play11 (เช็ค play8 ตลอด — ค้าง 15 วิ ให้เริ่มจาก play8 ใหม่)
-    run_play8_to_11(device)
+    # play7 → play11
+    for i in range(7, 12):
+        wait_and_click(device, f"play{i}.bmp", post_delay=1.5)
 
     # หลัง play11 → พิมพ์ชื่อ config + Enter
     log(serial, f"พิมพ์ชื่อ config: {C.CUSTOM_CONFIG_NAME}", Fore.GREEN)
@@ -1018,9 +904,7 @@ def ocr_ruby_number(img_gray):
     """OCR เลขจาก RUBY_REGION (เฉพาะตัวเลข) → คืน string เช่น '315' หรือ None"""
     if img_gray is None:
         return None
-    # ปรับ region ตาม SCREENCAP_SCALE (ถ้าย่อภาพ region ก็ต้องย่อตาม ไม่งั้น crop ผิด)
-    s = SCREENCAP_SCALE if SCREENCAP_SCALE and SCREENCAP_SCALE > 0 else 1.0
-    x, y, w, h = (int(round(v * s)) for v in C.RUBY_REGION)
+    x, y, w, h = C.RUBY_REGION
     H, W = img_gray.shape[:2]
     if x < 0 or y < 0 or x + w > W or y + h > H:
         return None
@@ -1228,15 +1112,7 @@ def finalize_cycle(device, found, ruby=None):
 # ═══════════════════════════════════════════════════════════════════
 def process_device(serial_or_device):
     serial = serial_or_device.serial if hasattr(serial_or_device, 'serial') else str(serial_or_device)
-    set_process_priority()   # idempotent — no-op ถ้า LOW_PRIORITY=0
-    setup_ram_first()        # idempotent — preload รูปเข้า RAM + keep resident
     client = AdbClient(host="127.0.0.1", port=5037)
-    # บังคับให้ทุก connection (shell/tap/screencap) มี timeout เสมอ
-    # ไม่งั้น adb ตอบช้า/ค้าง = thread block ตลอดกาล (CPU ว่างแต่ค้าง)
-    _orig_create = client.create_connection
-    def _create_with_timeout(timeout=None, _o=_orig_create, _d=getattr(C, "ADB_TIMEOUT", 15)):
-        return _o(timeout if timeout is not None else _d)
-    client.create_connection = _create_with_timeout
     device = client.device(serial)
     if device is None:
         log(serial, "ERROR: เชื่อมต่อ device ไม่ได้", Fore.RED)
@@ -1297,24 +1173,8 @@ def process_device(serial_or_device):
             finalize_cycle(device, found, ruby)
             device = disable_root(device)
 
-            # gc เก็บ reference cycle ที่ขอบรอบ (ไม่ page-out → RAM ค้างใน RAM, ลื่น)
-            if getattr(C, "GC_EACH_CYCLE", 1):
-                gc.collect()
-
             log(device.serial, "จบรอบ → เริ่มใหม่", Fore.GREEN)
             time.sleep(3)
-
-        except FixLteRestart:
-            # เจอ fixlte ระหว่างทำงาน → clear app + ลบไฟล์ → วน while เริ่มรอบใหม่
-            log(device.serial, "พบ fixlte → clear app + ลบไฟล์ + เริ่มขั้นตอนใหม่", Fore.YELLOW)
-            try:
-                close_app(device)
-                device = enable_root(device)
-                delete_account_files(device)
-                device = disable_root(device)
-            except Exception as e:
-                log(device.serial, f"fixlte recovery error: {e}", Fore.RED)
-            continue
 
         except Exception as e:
             log(device.serial, f"Error: {e}", Fore.RED)
@@ -1364,7 +1224,6 @@ def main():
     global bot_running
     load_runtime_config()
     set_process_priority()
-    setup_ram_first()
     if not find_adb_executable():
         print(f"{Fore.RED}[ERROR] ไม่เจอ adb.exe{Style.RESET_ALL}")
         return
