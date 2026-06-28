@@ -887,11 +887,11 @@ def run_play8_to_11(device):
         # กด play8
         wait_and_click(device, "play8.bmp", timeout=step_timeout, required=False, post_delay=1.5)
 
-        # ทำ play9 → play11 พร้อมจับ play8 ค้าง
+        # ทำ play9 → play11 พร้อมจับ play8 ค้าง + หา fix-run ตลอด
         i = 9
         play8_since = None
         step_start = time.time()
-        stuck = False
+        stuck = None   # None=ปกติ, "fix-run" หรือ "play8-stuck"
         while i < 12:
             if not bot_running:
                 return
@@ -900,12 +900,17 @@ def run_play8_to_11(device):
                 time.sleep(_POLL_INTERVAL)
                 continue
 
+            # fix-run: เจอเมื่อไหร่ reset → เริ่มจาก play8 ใหม่ทันที (เช็คตลอด)
+            if getattr(C, "CHECK_FIX_RUN", 1) and ImgSearchADB(img, img_path("fix-run.bmp")):
+                stuck = "fix-run"
+                break
+
             # watchdog: play8 ค้างไหม (เช็คตลอดทุกเฟรม)
             if ImgSearchADB(img, img_path("play8.bmp")):
                 if play8_since is None:
                     play8_since = time.time()
                 elif time.time() - play8_since >= stuck_sec:
-                    stuck = True
+                    stuck = "play8-stuck"
                     break
             else:
                 play8_since = None
@@ -927,7 +932,10 @@ def run_play8_to_11(device):
 
         if not stuck:
             return   # play8 → play11 เสร็จ
-        log(serial, f"⚠️ play8 ค้างครบ {stuck_sec} วิ → เริ่มจาก play8 ใหม่ (รอบ {attempt})", Fore.YELLOW)
+        if stuck == "fix-run":
+            log(serial, f"⚠️ พบ fix-run → reset เริ่มจาก play8 ใหม่ (รอบ {attempt})", Fore.YELLOW)
+        else:
+            log(serial, f"⚠️ play8 ค้างครบ {stuck_sec} วิ → เริ่มจาก play8 ใหม่ (รอบ {attempt})", Fore.YELLOW)
 
     log(serial, "redo play8 ครบ 5 รอบยังค้าง → ไปต่อ", Fore.YELLOW)
 
