@@ -147,6 +147,43 @@ def set_process_priority():
         print(f"{Fore.YELLOW}[PERF] set priority error: {e}{Style.RESET_ALL}")
 
 
+def _trim_working_set():
+    """คืน RAM ของ process กลับให้ระบบ (trim working set) — 'clear RAM' บน Windows
+    Windows จะ page กลับมาเองเมื่อใช้ ไม่เสียหาย แค่ทำให้ RAM ที่จองค้างลดลง"""
+    try:
+        gc.collect()
+        if os.name == "nt":
+            import ctypes
+            k32 = ctypes.windll.kernel32
+            k32.GetCurrentProcess.restype = ctypes.c_void_p
+            k32.SetProcessWorkingSetSize.argtypes = [ctypes.c_void_p, ctypes.c_size_t, ctypes.c_size_t]
+            # (-1, -1) = สั่งให้ Windows trim working set ออก
+            k32.SetProcessWorkingSetSize(k32.GetCurrentProcess(),
+                                         ctypes.c_size_t(-1), ctypes.c_size_t(-1))
+    except Exception:
+        pass
+
+
+_ram_trimmer_started = False
+
+
+def start_ram_trimmer():
+    """รัน thread เคลียร์ RAM เป็นระยะ (กัน RAM บวมตอนรันยาวๆ). idempotent"""
+    global _ram_trimmer_started
+    interval = getattr(C, "RAM_TRIM_INTERVAL", 0)
+    if _ram_trimmer_started or not interval or interval <= 0:
+        return
+    _ram_trimmer_started = True
+
+    def _loop():
+        while True:
+            time.sleep(interval)
+            _trim_working_set()
+
+    threading.Thread(target=_loop, daemon=True).start()
+    print(f"{Fore.CYAN}[PERF] RAM trimmer เปิด (เคลียร์ทุก {interval}s){Style.RESET_ALL}")
+
+
 def log(serial, msg, color=Fore.CYAN):
     try:
         print(f"{color}[{serial}] {msg}{Style.RESET_ALL}")
@@ -252,6 +289,7 @@ def get_connected_devices():
 #  Screencap + Image search  (วิธีเดียวกับ pes/main-pes.py)
 # ═══════════════════════════════════════════════════════════════════
 _MIN_SCREENCAP_INTERVAL = getattr(C, "MIN_SCREENCAP_INTERVAL", 0.25)
+_POLL_INTERVAL = getattr(C, "POLL_INTERVAL", 0.05)
 _LAST_SCREENCAP_TS = {}
 
 
@@ -397,7 +435,7 @@ def wait_and_click(device, name, timeout=C.DEFAULT_WAIT, required=True,
             tap(device, x, y)
             time.sleep(post_delay)
             return True
-        time.sleep(0.3)
+        time.sleep(_POLL_INTERVAL)
     if required:
         log(device.serial, f"⏰ timeout: ไม่เจอ {name} ใน {timeout}s", Fore.YELLOW)
     return False
@@ -421,7 +459,7 @@ def wait_and_click_first(device, names, timeout=C.DEFAULT_WAIT, post_delay=1.0,
                 tap(device, x, y)
                 time.sleep(post_delay)
                 return name
-        time.sleep(0.3)
+        time.sleep(_POLL_INTERVAL)
     return None
 
 
@@ -1122,6 +1160,8 @@ def finalize_cycle(device, found, ruby=None):
 # ═══════════════════════════════════════════════════════════════════
 def process_device(serial_or_device):
     serial = serial_or_device.serial if hasattr(serial_or_device, 'serial') else str(serial_or_device)
+    set_process_priority()   # idempotent — เผื่อถูกเรียกจาก launcher อื่นที่ไม่ผ่าน main()
+    start_ram_trimmer()
     client = AdbClient(host="127.0.0.1", port=5037)
     # บังคับให้ทุก connection (shell/tap/screencap) มี timeout เสมอ
     # ไม่งั้น adb ตอบช้า/ค้าง = thread block ตลอดกาล (CPU ว่างแต่ค้าง)
@@ -1244,6 +1284,7 @@ def main():
     global bot_running
     load_runtime_config()
     set_process_priority()
+    start_ram_trimmer()
     if not find_adb_executable():
         print(f"{Fore.RED}[ERROR] ไม่เจอ adb.exe{Style.RESET_ALL}")
         return
