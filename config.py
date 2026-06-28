@@ -49,46 +49,189 @@ SPLIT_BACKUP_BY_COUNT = 0
 
 # ── Performance: ลด priority ของ process กัน UI/Explorer ค้าง ──────────
 # รันหลายจอ cv2 จะกิน CPU จนเต็ม ทำให้ Windows Explorer/หน้าต่างอื่นค้าง
-#   1 = ตั้ง process เป็น BELOW_NORMAL (บอทสละ CPU ให้ UI, แต่บอท "ช้าลง")
-#   0 = ปกติ (เร็วสุด) ← แนะนำ เพราะแก้อาการค้างด้วย ADB timeout ไปแล้ว
-LOW_PRIORITY = 0
-
-# ── ปรับความลื่นเมื่อรันหลายจอ (16+ จอ) ───────────────────────────────
-# ย่อภาพก่อน match → matchTemplate เร็วขึ้นมาก (กิน CPU/RAM น้อยลง)
-#   1.0 = เต็ม (แม่นสุด, หนักสุด)
-#   0.5-0.75 = แนะนำเมื่อรันหลายจอ (เร็วขึ้น ~2-4 เท่า แม่นน้อยลงนิดหน่อย)
-SCREENCAP_SCALE = 1.0
-# เว้นระยะจับภาพขั้นต่ำต่อจอ (วินาที) — ต่ำ = เจอปุบจับปับ (เร็วสุด)
-#   0.033 = ~30fps ไม่หน่วง  |  ถ้า adb แน่น/หน่วง ค่อยเพิ่ม (เช่น 0.1-0.3)
-MIN_SCREENCAP_INTERVAL = 0.033
-# ลูปหาปุ่ม sleep แต่ละรอบ (วินาที) — ต่ำ = กดไวขึ้น (เจอ→กดทันที)
-POLL_INTERVAL = 0.033
-# gc.collect() ตอนจบแต่ละรอบ กัน reference cycle ค้าง (ไม่ page-out, ไม่กระตุก)
-GC_EACH_CYCLE = 1
-
-# ── ใช้ RAM เป็นหลัก (เครื่อง RAM เยอะ → เร็วสุด) ──────────────────────
-# 1 = preload รูป template ทั้งหมดเข้า RAM ตอนเริ่ม + บังคับ Windows ไม่ page out
-#     (ไม่คืน RAM ออก → ไม่มี page-in สะดุด → ลื่นสุด แลกกับใช้ RAM มากขึ้น)
-# 0 = lazy load ปกติ (ประหยัด RAM)
-USE_RAM_FIRST = 1
-RAM_RESIDENT_MIN_MB = 512    # บังคับให้ค้างใน RAM อย่างน้อยกี่ MB (กัน Windows page out)
-
-# ── ADB timeout (สำคัญมากเมื่อรันหลายจอ) ─────────────────────────────
-# ทุกคำสั่ง adb (screencap/shell/tap) จะรอไม่เกินกี่วินาที ถ้าเกิน = ตัดทิ้งลองใหม่
-# กันอาการ "thread ค้างรอ adb ตลอดกาล" (CPU ว่างแต่หน้าต่าง Not Responding)
-ADB_TIMEOUT = 15
-
-# ── ตรวจ fixlte.bmp ตลอด (ทุกเฟรม) → เจอแล้ว clear app + ลบไฟล์ + เริ่มรอบใหม่ ──
-#   1 = เปิด (หา img/fixlte.bmp ทุกครั้งที่จับภาพ)  |  0 = ปิด
-CHECK_FIXLTE = 1
+#   1 = ตั้ง process เป็น BELOW_NORMAL (บอทสละ CPU ให้ UI, ช้าลงเล็กน้อย)
+#   0 = ปกติ
+LOW_PRIORITY = 1
 
 # ── Timeout (วินาที) ─────────────────────────────────────────────────
 APPEAR_TIMEOUT = 4      # รอรูปโผล่ครั้งแรก (event-back / git-item / ok-gifitem) — ลดจาก 10
 ABSENT_SECS = 3         # กดรัวๆ จนไม่เจอรูปครบกี่วิ ถึงไปต่อ — ลดจาก 5
 PLAY6_TIMEOUT = 15      # play6 ถ้าไม่เจอใน 15 วิ ให้ข้าม
 PLAY_STEP_TIMEOUT = 10  # play2-5 / play7-11 ถ้าไม่เจอใน 10 วิ ให้ข้าม (กันค้างรอ 60 วิ)
-PLAY8_STUCK_TIMEOUT = 15  # ถ้า play8 โผล่ค้างครบกี่วิ (กดแล้วไม่ไป) → เริ่มจาก play8 ใหม่
-CHECK_FIX_RUN = 1         # หา fix-run.bmp ตลอดช่วง play8-11 เจอแล้ว reset เริ่มจาก play8 ใหม่
+DEFAULT_WAIT = 60       # รอ template ปกติสูงสุดกี่วิ
+LOOP_MAX_SECS = 120     # safety cap ของลูป item/pet (กันลูปค้างไม่จบ)
+ITEM3_TIMEOUT = 15      # ในลูป get-item ถ้าไม่เจอปุ่ม item3 ครบกี่วิ ให้จบลูป
+
+# ── Image match threshold ────────────────────────────────────────────
+MATCH_THRESHOLD = 0.8           # ปุ่มทั่วไป
+ITEM_MATCH_THRESHOLD = 0.85     # math ของที่สุ่มได้ (item-get / pet-get) เข้มขึ้นกันจำผิด
+
+# ── การ math ชื่อของที่สุ่มได้ ────────────────────────────────────────
+# key = ชื่อไฟล์รูปในโฟลเดอร์ (ITEM_GET_DIR / PET_GET_DIR)
+# value = ชื่อที่จะเอาไปตั้งชื่อไฟล์ .zip
+# ลำดับใน dict = ลำดับการเรียงชื่อในไฟล์ zip (เช่น headking+banana+trader)
+ITEM_GET_MAP = {
+    "item1.bmp": "backpack",
+    "item2.bmp": "headking",
+    "item3.bmp": "banana",
+    "item4.bmp": "kapok",
+    "item5.bmp": "sword",
+    "item6.bmp": "blueberry-horse",
+    "item7.bmp": "water-pendant",
+    "item8.bmp": "sweet-donut",
+    "item9.bmp": "lip-balm",
+    "item10.bmp": "muffin",
+    "item11.bmp": "melody-guitar",
+    "item12.bmp": "golden-wreath",
+    "item13.bmp": "chilled-moon",
+    "item14.bmp": "rainbow-drink",
+    "item15.bmp": "mini-safe",
+    "item16.bmp": "mushroom-drink",
+    "item17.bmp": "energy-drink",
+    "item18.bmp": "first-backpack",
+    "item19.bmp": "sour-soda",
+}
+PET_GET_MAP = {
+    "pet-item.bmp": "trader",
+    "pet-item2.bmp": "coin-scale",
+    "pet-item3.bmp": "chronicles",
+    "pet-item4.bmp": "do-re-mi",
+    "pet-item5.bmp": "banana-lion"
+}
+
+# ── ของที่ "เจอเดี่ยวๆ ไม่ต้องจด" ────────────────────────────────────
+# ของพวกนี้จะถูกจดก็ต่อเมื่อเจอคู่กับของอื่น (เช่น banana+trader)
+# ถ้าอยากบังคับให้จดแม้เจอเดี่ยว → ตั้งเป็น True  (ส่วน custom ในคำสั่ง)
+#   False = เจอเดี่ยวไม่จด   |   True = เจอเดี่ยวก็จด
+RECORD_ALONE = {
+    "banana": False,
+    "backpack": False,
+    "kapok": False,
+    "sword": False,
+    "blueberry-horse": False,
+    "water-pendant": False,
+    "sweet-donut": False,
+    "lip-balm": False,
+    "muffin": False,
+    "melody-guitar": False,
+    "golden-wreath": False,
+    "chilled-moon": False,
+    "rainbow-drink": False,
+    "mini-safe": False,
+    "mushroom-drink": False,
+    "energy-drink": False,
+    "first-backpack": False,
+    "sour-soda": False,
+    "coin-scale": False,
+    "chronicles": False,
+    "do-re-mi": False,
+    "banana-lion": False,
+}
+
+# ── เปิด/ปิด root ─────────────────────────────────────────────────────
+# MuMu Player ตรวจ root จาก root_permission setting (ไม่ใช่ adb root)
+# toggle root_permission ผ่าน MuMuManager มีผล "ทันที (live)" ไม่ต้อง restart
+#   root_permission=false → เกมไม่เจอ root (เปิดเกมผ่าน)
+#   su -c ยังใช้ได้เสมอจาก adb shell ไม่ว่า root_permission จะ true/false
+#
+# USE_MUMU_ROOT = True  → เปิด/ปิด root ผ่าน MuMuManager (สำหรับ MuMu)
+# USE_MUMU_ROOT = False → ใช้ adb root/unroot (สำหรับ AVD ธรรมดา)
+USE_MUMU_ROOT = True
+
+# path ของ MuMuManager.exe (ดูจาก info: nx_main\MuMuManager.exe)
+MUMU_MANAGER = r"C:\Program Files\Netease\MuMuPlayer\nx_main\MuMuManager.exe"
+# index ของ instance — ดูได้จาก:  MuMuManager.exe info -v all
+MUMU_INDEX = "2"
+
+# จัดการไฟล์ด้วย su -c หรือไม่
+#   True  = MuMu (root ผ่าน su, adb shell ไม่ใช่ root)  ← ต้องเป็น True เมื่อ USE_MUMU_ROOT
+#   False = adb root mode (adb shell เป็น root อยู่แล้ว)
+USE_SU = True
+
+# เวลารอหลัง adb root/unroot (เฉพาะโหมด adb root, USE_MUMU_ROOT=False) (วินาที)
+ROOT_TOGGLE_WAIT = 3
+
+# ── ไฟล์ที่ต้อง backup / ลบ (ต้องใช้ root) ────────────────────────────
+SHARED_PREFS_DIR = "/data/data/com.devsisters.crg/shared_prefs"
+SHARED_PREFS_FILES = [
+    "Cocos2dxPrefsFile.xml",
+    "com.devsisters.crg.v2.playerprefs.xml",
+    "com.devsisters.plugin.appInstalledId.pref.xml",
+    "com.devsisters.plugin.devsisterscontent.prefs.xml",
+]
+FILES_DIR = "/data/data/com.devsisters.crg/files"
+FILES_FILES = [
+    ".C80C5535E9E69661F4C5FCFEC98D662D",
+]
+
+# ── ดึง member_id มาต่อท้ายชื่อไฟล์ zip ───────────────────────────────
+# อ่านจาก Cocos2dxPrefsFile.xml:  <string name="member_id">DPDDH7496</string>
+# ชื่อไฟล์จะเป็น  headking+trader+[DPDDH7496]+.zip
+MEMBER_ID_FILE = "Cocos2dxPrefsFile.xml"
+MEMBER_ID_KEY = "member_id"
+
+# ── โฟลเดอร์เก็บผลลัพธ์ ───────────────────────────────────────────────
+BACKUP_DIR = "backup"
+# ═══════════════════════════════════════════════════════════════════
+#  config.py  —  ตั้งค่าบอท Cookie Run สำหรับ main.py
+# ═══════════════════════════════════════════════════════════════════
+
+# ── Package / Path ของเกม ────────────────────────────────────────────
+PACKAGE = "com.devsisters.crg"
+DATA_DIR = "/data/data/com.devsisters.crg"
+
+# โฟลเดอร์รูป template
+IMG_DIR = "img"
+ITEM_GET_DIR = "img/item-get"   # รูปไว้ math ของที่สุ่มได้ (get-item)
+PET_GET_DIR = "img/pet-get"     # รูปไว้ math เพ็ทที่สุ่มได้ (get-pet)
+
+# ── ชื่อ config ที่ต้องพิมพ์ตอน play11 ───────────────────────────────
+# หลังกด play11 จะมีช่องให้พิมพ์ → พิมพ์ค่านี้แล้วกด Enter
+CUSTOM_CONFIG_NAME = "ozx"
+
+# ── จำนวนรอบ event-back → ok-gifitem ─────────────────────────────────
+EVENT_LOOP_ROUNDS = 3
+
+# ── เปิด/ปิดแต่ละขั้นตอน (custom-config) ──────────────────────────────
+# ค่า default พวกนี้ถูก override ได้ด้วย configmain.json (แก้ผ่าน gui.py)
+#   1 = ทำขั้นตอนนี้   |   0 = ข้าม
+# หมายเหตุ: start_game + finalize (backup ถ้าเจอ + ลบไฟล์) ทำงานเสมอ
+#   ตัวอย่าง: เปิดแค่ get_item=1, get_pet=0 → จบ get-item แล้ว
+#             ส่งไฟล์ id (zip) ออกทันทีถ้าเจอ match (ตามกฎ RECORD_ALONE)
+STEPS = {
+    "first_loop": 1,   # ลบไฟล์ save ก่อนเริ่ม (initial clean)
+    "play":       1,   # play sequence (เข้าเกม + พิมพ์ชื่อ config)
+    "event":      1,   # event-back / git-item / ok-gifitem loops
+    "boxes":      1,   # รับของ box1-5
+    "check_ruby": 0,   # เช็ค/OCR เลข ruby หลัง box ก่อน get-item (ต้องใช้ easyocr)
+    "get_item":   1,   # สุ่มของ get-item
+    "get_pet":    1,   # สุ่มเพ็ท get-pet
+}
+
+# ── Check-Ruby (OCR เลขก่อน get-item) ────────────────────────────────
+# เปิดด้วย steps.check_ruby = 1 → หลัง box จบจะหา checkpoint-ruby.bmp
+# เจอแล้ว OCR ตัวเลขที่ RUBY_REGION เก็บไว้ แล้วเอาไปต่อท้ายชื่อ zip
+#   ตัวอย่าง: headking+trader+[NXSGM1082]+[315].zip   (315 = เลข ruby)
+RUBY_REGION = (272, 12, 59, 31)   # (x, y, w, h) ตำแหน่งเลขบนจอ
+RUBY_CHECK_TIMEOUT = 10           # รอ checkpoint-ruby.bmp โผล่กี่วิ (ไม่เจอ → ข้าม)
+
+# ── แยกไฟล์ backup ตามจำนวนชิ้นที่เจอ (find-1 / find-2 / find-3 ...) ──
+# นับจากจำนวนของที่ถูกจดในชื่อไฟล์ (รวม get-item + get-pet)
+#   0 = เก็บรวมใน backup/ (เดิม)
+#   1 = แยกใส่ backup/find-N/  (N = จำนวนชิ้น เช่น เจอ 2 ชิ้น → backup/find-2/)
+SPLIT_BACKUP_BY_COUNT = 0
+
+# ── Performance: ลด priority ของ process กัน UI/Explorer ค้าง ──────────
+# รันหลายจอ cv2 จะกิน CPU จนเต็ม ทำให้ Windows Explorer/หน้าต่างอื่นค้าง
+#   1 = ตั้ง process เป็น BELOW_NORMAL (บอทสละ CPU ให้ UI, ช้าลงเล็กน้อย)
+#   0 = ปกติ
+LOW_PRIORITY = 1
+
+# ── Timeout (วินาที) ─────────────────────────────────────────────────
+APPEAR_TIMEOUT = 4      # รอรูปโผล่ครั้งแรก (event-back / git-item / ok-gifitem) — ลดจาก 10
+ABSENT_SECS = 3         # กดรัวๆ จนไม่เจอรูปครบกี่วิ ถึงไปต่อ — ลดจาก 5
+PLAY6_TIMEOUT = 15      # play6 ถ้าไม่เจอใน 15 วิ ให้ข้าม
+PLAY_STEP_TIMEOUT = 10  # play2-5 / play7-11 ถ้าไม่เจอใน 10 วิ ให้ข้าม (กันค้างรอ 60 วิ)
 DEFAULT_WAIT = 60       # รอ template ปกติสูงสุดกี่วิ
 LOOP_MAX_SECS = 120     # safety cap ของลูป item/pet (กันลูปค้างไม่จบ)
 ITEM3_TIMEOUT = 15      # ในลูป get-item ถ้าไม่เจอปุ่ม item3 ครบกี่วิ ให้จบลูป
