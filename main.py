@@ -307,6 +307,7 @@ def get_connected_devices():
 _MIN_SCREENCAP_INTERVAL = getattr(C, "MIN_SCREENCAP_INTERVAL", 0.25)
 _POLL_INTERVAL = getattr(C, "POLL_INTERVAL", 0.05)
 _LAST_SCREENCAP_TS = {}
+_LAST_FIXRUN_TAP = {}   # cooldown กด fix-run ต่อ device
 
 
 class FixLteRestart(BaseException):
@@ -341,6 +342,14 @@ def fast_screencap(device):
         if ImgSearchADB(gray, img_path("fixlte.bmp")):
             log(serial, "⚠️ พบ fixlte.bmp!", Fore.YELLOW)
             raise FixLteRestart()
+
+    # เช็ค fix-run ตลอดทุกเฟรม ทุกที่ → เจอแล้วกดทิ้ง (cooldown 1 วิ/จอ กันกดรัว)
+    if gray is not None and getattr(C, "CHECK_FIX_RUN", 1):
+        fr = ImgSearchADB(gray, img_path("fix-run.bmp"))
+        if fr and (time.time() - _LAST_FIXRUN_TAP.get(serial, 0.0) > 1.0):
+            log(serial, "พบ fix-run → กด", Fore.YELLOW)
+            tap(device, fr[0][0], fr[0][1])
+            _LAST_FIXRUN_TAP[serial] = time.time()
 
     return gray
 
@@ -887,11 +896,11 @@ def run_play8_to_11(device):
         # กด play8
         wait_and_click(device, "play8.bmp", timeout=step_timeout, required=False, post_delay=1.5)
 
-        # ทำ play9 → play11 พร้อมจับ play8 ค้าง + หา fix-run ตลอด
+        # ทำ play9 → play11 พร้อมจับ play8 ค้าง
+        # (fix-run ถูกเช็ค+กดให้ตลอดทุกเฟรมใน fast_screencap แล้ว — global)
         i = 9
         play8_since = None
         step_start = time.time()
-        fixrun_clicks = 0
         stuck = False   # True = play8 ค้าง → redo จาก play8
         while i < 12:
             if not bot_running:
@@ -900,22 +909,6 @@ def run_play8_to_11(device):
             if img is None:
                 time.sleep(_POLL_INTERVAL)
                 continue
-
-            # fix-run: เจอแล้ว "กด fix-run" แทน (ไม่ redo play8) → แล้วไป play9 ต่อ
-            if getattr(C, "CHECK_FIX_RUN", 1):
-                fr = ImgSearchADB(img, img_path("fix-run.bmp"))
-                if fr:
-                    fixrun_clicks += 1
-                    if fixrun_clicks > 10:
-                        log(serial, "fix-run กดเกิน 10 ครั้งยังไม่หาย → ไปต่อ", Fore.YELLOW)
-                        return
-                    log(serial, "พบ fix-run → กด fix-run แล้วไป play9 ต่อ", Fore.YELLOW)
-                    tap(device, fr[0][0], fr[0][1])
-                    time.sleep(1.5)
-                    i = 9                    # ไป play9
-                    play8_since = None
-                    step_start = time.time()
-                    continue
 
             # watchdog: play8 ค้างไหม (เช็คตลอดทุกเฟรม)
             if ImgSearchADB(img, img_path("play8.bmp")):
