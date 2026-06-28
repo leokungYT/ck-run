@@ -273,8 +273,14 @@ _POLL_INTERVAL = getattr(C, "POLL_INTERVAL", 0.05)
 _LAST_SCREENCAP_TS = {}
 
 
+class FixLteRestart(BaseException):
+    """raise เมื่อเจอ fixlte.bmp → process_device จะ clear app + ลบไฟล์ + เริ่มรอบใหม่
+    ใช้ BaseException เพื่อให้เด้งทะลุ except Exception ทุกชั้นขึ้นไปถึง process_device แน่นอน"""
+    pass
+
+
 def fast_screencap(device):
-    """Screencap จาก raw RGBA → gray (เร็วกว่า PNG)"""
+    """Screencap (PNG) → gray + เช็ค fixlte ตลอด (เจอ → raise FixLteRestart)"""
     serial = device.serial
     wait = _MIN_SCREENCAP_INTERVAL - (time.time() - _LAST_SCREENCAP_TS.get(serial, 0.0))
     if wait > 0:
@@ -283,6 +289,7 @@ def fast_screencap(device):
 
     # PNG screencap (เหมือนเดิม — เล็กกว่า raw เลยเร็วกว่าตอนหลายจอ)
     # bounded ด้วย ADB_TIMEOUT ผ่าน create_connection ที่ patch ไว้ → ไม่ค้างถาวร
+    gray = None
     try:
         raw = device.screencap()
         if raw:
@@ -290,10 +297,16 @@ def fast_screencap(device):
             if gray is not None and SCREENCAP_SCALE != 1.0:
                 gray = cv2.resize(gray, None, fx=SCREENCAP_SCALE, fy=SCREENCAP_SCALE,
                                   interpolation=cv2.INTER_LINEAR)
-            return gray
     except Exception:
-        pass
-    return None
+        gray = None
+
+    # เช็ค fixlte ตลอดทุกเฟรม (นอก try → FixLteRestart เด้งขึ้นไปได้ ไม่โดนกลืน)
+    if gray is not None and getattr(C, "CHECK_FIXLTE", 1):
+        if ImgSearchADB(gray, img_path("fixlte.bmp")):
+            log(serial, "⚠️ พบ fixlte.bmp!", Fore.YELLOW)
+            raise FixLteRestart()
+
+    return gray
 
 
 def load_template(path):
@@ -1184,6 +1197,18 @@ def process_device(serial_or_device):
 
             log(device.serial, "จบรอบ → เริ่มใหม่", Fore.GREEN)
             time.sleep(3)
+
+        except FixLteRestart:
+            # เจอ fixlte ระหว่างทำงาน → clear app + ลบไฟล์ → วน while เริ่มรอบใหม่
+            log(device.serial, "พบ fixlte → clear app + ลบไฟล์ + เริ่มขั้นตอนใหม่", Fore.YELLOW)
+            try:
+                close_app(device)
+                device = enable_root(device)
+                delete_account_files(device)
+                device = disable_root(device)
+            except Exception as e:
+                log(device.serial, f"fixlte recovery error: {e}", Fore.RED)
+            continue
 
         except Exception as e:
             log(device.serial, f"Error: {e}", Fore.RED)

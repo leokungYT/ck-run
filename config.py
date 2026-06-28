@@ -72,6 +72,10 @@ GC_EACH_CYCLE = 1
 # กันอาการ "thread ค้างรอ adb ตลอดกาล" (CPU ว่างแต่หน้าต่าง Not Responding)
 ADB_TIMEOUT = 15
 
+# ── ตรวจ fixlte.bmp ตลอด (ทุกเฟรม) → เจอแล้ว clear app + ลบไฟล์ + เริ่มรอบใหม่ ──
+#   1 = เปิด (หา img/fixlte.bmp ทุกครั้งที่จับภาพ)  |  0 = ปิด
+CHECK_FIXLTE = 1
+
 # ── Timeout (วินาที) ─────────────────────────────────────────────────
 APPEAR_TIMEOUT = 4      # รอรูปโผล่ครั้งแรก (event-back / git-item / ok-gifitem) — ลดจาก 10
 ABSENT_SECS = 3         # กดรัวๆ จนไม่เจอรูปครบกี่วิ ถึงไปต่อ — ลดจาก 5
