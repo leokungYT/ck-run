@@ -12,6 +12,7 @@ import shutil
 import zipfile
 import json
 import re
+import gc
 import concurrent.futures
 from ppadb.client import Client as AdbClient
 from colorama import Fore, Style, init
@@ -28,7 +29,7 @@ import config as C
 adb_path = "adb"
 bot_running = False
 
-SCREENCAP_SCALE = 1.0           # ไม่ย่อภาพ → coordinate ตรงกับ template เดิม
+SCREENCAP_SCALE = getattr(C, "SCREENCAP_SCALE", 1.0)   # ย่อภาพก่อน match (ตั้งใน config.py)
 IMAGE_CACHE = {}
 _image_cache_lock = threading.Lock()
 
@@ -250,7 +251,7 @@ def get_connected_devices():
 # ═══════════════════════════════════════════════════════════════════
 #  Screencap + Image search  (วิธีเดียวกับ pes/main-pes.py)
 # ═══════════════════════════════════════════════════════════════════
-_MIN_SCREENCAP_INTERVAL = 0.25
+_MIN_SCREENCAP_INTERVAL = getattr(C, "MIN_SCREENCAP_INTERVAL", 0.25)
 _LAST_SCREENCAP_TS = {}
 
 
@@ -264,7 +265,7 @@ def fast_screencap(device):
 
     conn = None
     try:
-        conn = device.client.create_connection(timeout=device.client.timeout)
+        conn = device.client.create_connection(timeout=getattr(C, "ADB_TIMEOUT", 15))
         conn.send(f"host:transport:{device.serial}")
         conn.check_status()
         conn.send("shell:screencap")
@@ -274,9 +275,12 @@ def fast_screencap(device):
             w = int.from_bytes(raw[0:4], 'little')
             h = int.from_bytes(raw[4:8], 'little')
             expected = w * h * 4
-            if len(raw) >= 12 + expected:
+            # header อาจ 12 ไบต์ (เก่า) หรือ 16 ไบต์ (Android 12+ มี colorspace)
+            # คำนวณจากความยาวจริง = ปลอดภัยกว่าการ fix ที่ 12 (กันภาพเพี้ยน)
+            hdr = len(raw) - expected
+            if hdr in (12, 16) and 0 < w < 10000 and 0 < h < 10000:
                 gray = cv2.cvtColor(
-                    np.frombuffer(raw, dtype=np.uint8, offset=12, count=expected).reshape((h, w, 4)),
+                    np.frombuffer(raw, dtype=np.uint8, offset=hdr, count=expected).reshape((h, w, 4)),
                     cv2.COLOR_RGBA2GRAY)
                 if SCREENCAP_SCALE != 1.0:
                     gray = cv2.resize(gray, (int(w * SCREENCAP_SCALE), int(h * SCREENCAP_SCALE)),
@@ -363,7 +367,11 @@ def ImgSearchADB(img, path, threshold=C.MATCH_THRESHOLD):
 
 # ── helper คลิก ──────────────────────────────────────────────────────
 def tap(device, x, y):
-    device.shell(f"input swipe {x} {y} {x} {y} 100")
+    try:
+        device.shell(f"input swipe {x} {y} {x} {y} 100")
+    except Exception as e:
+        # adb ตอบช้า/timeout → ข้ามการกดนี้ไป (ไม่ให้ค้าง/ล้มทั้งรอบ)
+        log(device.serial, f"tap timeout/err ({x},{y}): {e}", Fore.YELLOW)
 
 
 def img_path(name, folder=C.IMG_DIR):
@@ -904,7 +912,9 @@ def ocr_ruby_number(img_gray):
     """OCR เลขจาก RUBY_REGION (เฉพาะตัวเลข) → คืน string เช่น '315' หรือ None"""
     if img_gray is None:
         return None
-    x, y, w, h = C.RUBY_REGION
+    # ปรับ region ตาม SCREENCAP_SCALE (ถ้าย่อภาพ region ก็ต้องย่อตาม ไม่งั้น crop ผิด)
+    s = SCREENCAP_SCALE if SCREENCAP_SCALE and SCREENCAP_SCALE > 0 else 1.0
+    x, y, w, h = (int(round(v * s)) for v in C.RUBY_REGION)
     H, W = img_gray.shape[:2]
     if x < 0 or y < 0 or x + w > W or y + h > H:
         return None
@@ -1113,6 +1123,12 @@ def finalize_cycle(device, found, ruby=None):
 def process_device(serial_or_device):
     serial = serial_or_device.serial if hasattr(serial_or_device, 'serial') else str(serial_or_device)
     client = AdbClient(host="127.0.0.1", port=5037)
+    # บังคับให้ทุก connection (shell/tap/screencap) มี timeout เสมอ
+    # ไม่งั้น adb ตอบช้า/ค้าง = thread block ตลอดกาล (CPU ว่างแต่ค้าง)
+    _orig_create = client.create_connection
+    def _create_with_timeout(timeout=None, _o=_orig_create, _d=getattr(C, "ADB_TIMEOUT", 15)):
+        return _o(timeout if timeout is not None else _d)
+    client.create_connection = _create_with_timeout
     device = client.device(serial)
     if device is None:
         log(serial, "ERROR: เชื่อมต่อ device ไม่ได้", Fore.RED)
@@ -1172,6 +1188,10 @@ def process_device(serial_or_device):
             device = enable_root(device)
             finalize_cycle(device, found, ruby)
             device = disable_root(device)
+
+            # คืน memory ที่ค้างจากรอบนี้ (กัน RAM บวมตอนรันยาวๆ หลายจอ)
+            if getattr(C, "GC_EACH_CYCLE", 1):
+                gc.collect()
 
             log(device.serial, "จบรอบ → เริ่มใหม่", Fore.GREEN)
             time.sleep(3)
