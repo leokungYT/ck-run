@@ -87,6 +87,7 @@ APPEAR_TIMEOUT = 4      # รอรูปโผล่ครั้งแรก (e
 ABSENT_SECS = 3         # กดรัวๆ จนไม่เจอรูปครบกี่วิ ถึงไปต่อ — ลดจาก 5
 PLAY6_TIMEOUT = 15      # play6 ถ้าไม่เจอใน 15 วิ ให้ข้าม
 PLAY_STEP_TIMEOUT = 10  # play2-5 / play7-11 ถ้าไม่เจอใน 10 วิ ให้ข้าม (กันค้างรอ 60 วิ)
+PLAY8_STUCK_TIMEOUT = 15  # ถ้า play8 โผล่ค้างครบกี่วิ (กดแล้วไม่ไป) → เริ่มจาก play8 ใหม่
 DEFAULT_WAIT = 60       # รอ template ปกติสูงสุดกี่วิ
 LOOP_MAX_SECS = 120     # safety cap ของลูป item/pet (กันลูปค้างไม่จบ)
 ITEM3_TIMEOUT = 15      # ในลูป get-item ถ้าไม่เจอปุ่ม item3 ครบกี่วิ ให้จบลูป

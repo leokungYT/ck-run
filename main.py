@@ -875,6 +875,63 @@ def decide_zip_name(found):
     return None
 
 
+def run_play8_to_11(device):
+    """play8 → play11 พร้อม watchdog เช็ค play8 ตลอด:
+    ถ้า play8 โผล่ค้างครบ PLAY8_STUCK_TIMEOUT วิ (กดแล้วไม่ไปไหน) → เริ่มจาก play8 ใหม่
+    (redo สูงสุด 5 รอบ กันวนไม่จบ)"""
+    serial = device.serial
+    stuck_sec = getattr(C, "PLAY8_STUCK_TIMEOUT", 15)
+    step_timeout = getattr(C, "PLAY_STEP_TIMEOUT", 10)
+
+    for attempt in range(1, 6):
+        # กด play8
+        wait_and_click(device, "play8.bmp", timeout=step_timeout, required=False, post_delay=1.5)
+
+        # ทำ play9 → play11 พร้อมจับ play8 ค้าง
+        i = 9
+        play8_since = None
+        step_start = time.time()
+        stuck = False
+        while i < 12:
+            if not bot_running:
+                return
+            img = fast_screencap(device)
+            if img is None:
+                time.sleep(_POLL_INTERVAL)
+                continue
+
+            # watchdog: play8 ค้างไหม (เช็คตลอดทุกเฟรม)
+            if ImgSearchADB(img, img_path("play8.bmp")):
+                if play8_since is None:
+                    play8_since = time.time()
+                elif time.time() - play8_since >= stuck_sec:
+                    stuck = True
+                    break
+            else:
+                play8_since = None
+
+            # กด play{i} ถ้าเจอ
+            pts = ImgSearchADB(img, img_path(f"play{i}.bmp"))
+            if pts:
+                tap(device, pts[0][0], pts[0][1])
+                log(serial, f"คลิก play{i}")
+                time.sleep(1.5)
+                i += 1
+                step_start = time.time()
+                play8_since = None
+            elif time.time() - step_start > step_timeout:
+                log(serial, f"ไม่เจอ play{i} ใน {step_timeout}s → ข้าม", Fore.YELLOW)
+                i += 1
+                step_start = time.time()
+            time.sleep(_POLL_INTERVAL)
+
+        if not stuck:
+            return   # play8 → play11 เสร็จ
+        log(serial, f"⚠️ play8 ค้างครบ {stuck_sec} วิ → เริ่มจาก play8 ใหม่ (รอบ {attempt})", Fore.YELLOW)
+
+    log(serial, "redo play8 ครบ 5 รอบยังค้าง → ไปต่อ", Fore.YELLOW)
+
+
 def run_play_sequence(device):
     serial = device.serial
     log(serial, "=== PLAY SEQUENCE ===", Fore.GREEN)
@@ -890,9 +947,10 @@ def run_play_sequence(device):
         else:
             wait_and_click(device, f"play{i}.bmp", post_delay=1.5)
 
-    # play7 → play11
-    for i in range(7, 12):
-        wait_and_click(device, f"play{i}.bmp", post_delay=1.5)
+    # play7
+    wait_and_click(device, "play7.bmp", timeout=C.PLAY_STEP_TIMEOUT, required=False, post_delay=1.5)
+    # play8 → play11 (เช็ค play8 ตลอด — ค้าง 15 วิ ให้เริ่มจาก play8 ใหม่)
+    run_play8_to_11(device)
 
     # หลัง play11 → พิมพ์ชื่อ config + Enter
     log(serial, f"พิมพ์ชื่อ config: {C.CUSTOM_CONFIG_NAME}", Fore.GREEN)
