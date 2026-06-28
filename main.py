@@ -147,21 +147,57 @@ def set_process_priority():
         print(f"{Fore.YELLOW}[PERF] set priority error: {e}{Style.RESET_ALL}")
 
 
-def _trim_working_set():
-    """คืน RAM ของ process กลับให้ระบบ (trim working set) — 'clear RAM' บน Windows
-    Windows จะ page กลับมาเองเมื่อใช้ ไม่เสียหาย แค่ทำให้ RAM ที่จองค้างลดลง"""
+def _keep_resident():
+    """บังคับ Windows ให้เก็บ working set ของ process ไว้ใน RAM (ไม่ page out)
+    = ใช้ RAM เป็นหลัก → ไม่มี page-in สะดุด (เหมาะเครื่อง RAM เยอะ)"""
     try:
-        gc.collect()
         if os.name == "nt":
             import ctypes
+            from ctypes import wintypes
             k32 = ctypes.windll.kernel32
             k32.GetCurrentProcess.restype = ctypes.c_void_p
-            k32.SetProcessWorkingSetSize.argtypes = [ctypes.c_void_p, ctypes.c_size_t, ctypes.c_size_t]
-            # (-1, -1) = สั่งให้ Windows trim working set ออก
-            k32.SetProcessWorkingSetSize(k32.GetCurrentProcess(),
-                                         ctypes.c_size_t(-1), ctypes.c_size_t(-1))
+            k32.SetProcessWorkingSetSizeEx.argtypes = [ctypes.c_void_p, ctypes.c_size_t,
+                                                       ctypes.c_size_t, wintypes.DWORD]
+            QUOTA_LIMITS_HARDWS_MIN_ENABLE = 0x00000001   # บังคับ min (ค้างใน RAM)
+            QUOTA_LIMITS_HARDWS_MAX_DISABLE = 0x00000008  # ไม่จำกัด max (โตได้)
+            mb = int(getattr(C, "RAM_RESIDENT_MIN_MB", 512))
+            mn = ctypes.c_size_t(mb * 1024 * 1024)
+            mx = ctypes.c_size_t(mb * 8 * 1024 * 1024)
+            return bool(k32.SetProcessWorkingSetSizeEx(
+                k32.GetCurrentProcess(), mn, mx,
+                QUOTA_LIMITS_HARDWS_MIN_ENABLE | QUOTA_LIMITS_HARDWS_MAX_DISABLE))
     except Exception:
         pass
+    return False
+
+
+def preload_templates():
+    """โหลดรูป template ทั้งหมดใน img/ เข้า RAM ล่วงหน้า (กัน lazy-read ตอนรัน)"""
+    n = 0
+    try:
+        for root, _dirs, files in os.walk(C.IMG_DIR):
+            for f in files:
+                if f.lower().endswith((".bmp", ".png")):
+                    if load_template(os.path.join(root, f)) is not None:
+                        n += 1
+    except Exception:
+        pass
+    return n
+
+
+_ram_first_done = False
+
+
+def setup_ram_first():
+    """ใช้ RAM เป็นหลัก: preload รูปเข้า RAM + บังคับ resident. idempotent"""
+    global _ram_first_done
+    if _ram_first_done or not getattr(C, "USE_RAM_FIRST", 1):
+        return
+    _ram_first_done = True
+    n = preload_templates()
+    resident = _keep_resident()
+    print(f"{Fore.CYAN}[RAM] ใช้ RAM เป็นหลัก — preload {n} รูปเข้า RAM"
+          f"{' + keep-resident ON' if resident else ''}{Style.RESET_ALL}")
 
 
 def log(serial, msg, color=Fore.CYAN):
@@ -310,9 +346,10 @@ def fast_screencap(device):
 
 
 def load_template(path):
+    key = os.path.normpath(path)   # normalize → preload & runtime ใช้ key เดียวกัน
     with _image_cache_lock:
-        if path in IMAGE_CACHE:
-            return IMAGE_CACHE[path]
+        if key in IMAGE_CACHE:
+            return IMAGE_CACHE[key]
     t = None
     base, ext = os.path.splitext(path)
     alt = base + (".png" if ext.lower() == ".bmp" else ".bmp")
@@ -326,7 +363,7 @@ def load_template(path):
                            max(1, int(t.shape[0] * SCREENCAP_SCALE))),
                        interpolation=cv2.INTER_LINEAR)
     with _image_cache_lock:
-        IMAGE_CACHE[path] = t
+        IMAGE_CACHE[key] = t
     return t
 
 
@@ -1124,6 +1161,7 @@ def finalize_cycle(device, found, ruby=None):
 def process_device(serial_or_device):
     serial = serial_or_device.serial if hasattr(serial_or_device, 'serial') else str(serial_or_device)
     set_process_priority()   # idempotent — no-op ถ้า LOW_PRIORITY=0
+    setup_ram_first()        # idempotent — preload รูปเข้า RAM + keep resident
     client = AdbClient(host="127.0.0.1", port=5037)
     # บังคับให้ทุก connection (shell/tap/screencap) มี timeout เสมอ
     # ไม่งั้น adb ตอบช้า/ค้าง = thread block ตลอดกาล (CPU ว่างแต่ค้าง)
@@ -1191,9 +1229,9 @@ def process_device(serial_or_device):
             finalize_cycle(device, found, ruby)
             device = disable_root(device)
 
-            # เคลียร์ RAM ที่ขอบรอบ (เกมปิดอยู่ → ปลอดภัย ไม่กระตุกระหว่างทำงาน)
+            # gc เก็บ reference cycle ที่ขอบรอบ (ไม่ page-out → RAM ค้างใน RAM, ลื่น)
             if getattr(C, "GC_EACH_CYCLE", 1):
-                _trim_working_set()   # gc.collect() + คืน working set ให้ระบบ
+                gc.collect()
 
             log(device.serial, "จบรอบ → เริ่มใหม่", Fore.GREEN)
             time.sleep(3)
@@ -1258,6 +1296,7 @@ def main():
     global bot_running
     load_runtime_config()
     set_process_priority()
+    setup_ram_first()
     if not find_adb_executable():
         print(f"{Fore.RED}[ERROR] ไม่เจอ adb.exe{Style.RESET_ALL}")
         return

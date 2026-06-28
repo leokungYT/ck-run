@@ -63,9 +63,15 @@ SCREENCAP_SCALE = 1.0
 MIN_SCREENCAP_INTERVAL = 0.033
 # ลูปหาปุ่ม sleep แต่ละรอบ (วินาที) — ต่ำ = กดไวขึ้น (เจอ→กดทันที)
 POLL_INTERVAL = 0.033
-# เคลียร์ RAM ตอนจบแต่ละรอบ (gc.collect + trim working set) — ทำที่ขอบรอบ
-# ตอนเกมถูกปิดอยู่แล้ว ปลอดภัย ไม่กระตุกระหว่างทำงาน  (1=เปิด, 0=ปิด)
+# gc.collect() ตอนจบแต่ละรอบ กัน reference cycle ค้าง (ไม่ page-out, ไม่กระตุก)
 GC_EACH_CYCLE = 1
+
+# ── ใช้ RAM เป็นหลัก (เครื่อง RAM เยอะ → เร็วสุด) ──────────────────────
+# 1 = preload รูป template ทั้งหมดเข้า RAM ตอนเริ่ม + บังคับ Windows ไม่ page out
+#     (ไม่คืน RAM ออก → ไม่มี page-in สะดุด → ลื่นสุด แลกกับใช้ RAM มากขึ้น)
+# 0 = lazy load ปกติ (ประหยัด RAM)
+USE_RAM_FIRST = 1
+RAM_RESIDENT_MIN_MB = 512    # บังคับให้ค้างใน RAM อย่างน้อยกี่ MB (กัน Windows page out)
 
 # ── ADB timeout (สำคัญมากเมื่อรันหลายจอ) ─────────────────────────────
 # ทุกคำสั่ง adb (screencap/shell/tap) จะรอไม่เกินกี่วินาที ถ้าเกิน = ตัดทิ้งลองใหม่
