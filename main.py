@@ -1029,10 +1029,13 @@ def run_get_item(device, found):
 # ═══════════════════════════════════════════════════════════════════
 def run_get_pet(device, found):
     """
-    pet1 → pet2 (1 รอบ)
-    แล้ววนกด pet3/pet4 ไปเรื่อยๆ จนเจอ end-pet (หรือชน LOOP_MAX_SECS) → break
-    ระหว่างวน scan รูปใน pet-get/ เพื่อ math → เจอแล้วจดลง found แต่ "ไม่หยุด/ไม่ clear"
-    วนสุ่มต่อจนครบเงื่อนไข break เอง (เหมือน get-item) — จดได้หลายตัว
+    pet1 → pet2 (1 รอบ) แล้ววนกด pet3/pet4 ไปเรื่อยๆ
+    ระหว่างวน scan รูปใน pet-get/ เพื่อ math → เจอแล้วจดลง found (ไม่ clear)
+    break เมื่อ:
+      - เจอเพ็ท "strong" (ไม่อยู่ใน RECORD_ALONE หรือ RECORD_ALONE=True เช่น trader) → เจอปุ๊บจบปั๊บ
+      - เจอ end-pet.bmp
+      - ชน LOOP_MAX_SECS (safety cap)
+    เพ็ท weak (อยู่ใน RECORD_ALONE=False) → จดไว้แต่ "ไม่หยุด" วนสุ่มต่อ (อ้างอิงเงื่อนไขเดียวกับ decide_zip_name)
     """
     serial = device.serial
     log(serial, "=== GET-PET ===", Fore.GREEN)
@@ -1049,13 +1052,21 @@ def run_get_pet(device, found):
             time.sleep(0.3)
             continue
 
-        # math เพ็ทที่สุ่มได้ → จดไว้แล้ว "วนต่อ" (ไม่ break) จนกว่าจะเจอ end-pet
+        # math เพ็ทที่สุ่มได้ → จดไว้ (ไม่ clear) แล้ววนต่อ
+        # เจอเพ็ท strong (ไม่อยู่ใน RECORD_ALONE เช่น trader) → จบเลย | weak → จดแล้ววนสุ่มต่อ
+        pet_hit = False
         for fname, name in C.PET_GET_MAP.items():
             if name in found:
                 continue
             if ImgSearchADB(img, img_path(fname, C.PET_GET_DIR), C.ITEM_MATCH_THRESHOLD):
                 found.add(name)
-                log(serial, f"⭐ get-pet เจอ: {name} ({fname})", Fore.GREEN)
+                strong = (name not in C.RECORD_ALONE) or (C.RECORD_ALONE.get(name) is True)
+                log(serial, f"⭐ get-pet เจอ: {name} ({fname})"
+                            + (" → จบ" if strong else " (วนต่อ)"), Fore.GREEN)
+                if strong:
+                    pet_hit = True
+        if pet_hit:
+            break
 
         # end-pet → จบ  (ถ้ายังไม่มีไฟล์ end-pet.bmp จะใช้ safety cap แทน)
         if ImgSearchADB(img, img_path("end-pet.bmp")):
