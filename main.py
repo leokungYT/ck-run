@@ -1030,8 +1030,9 @@ def run_get_item(device, found):
 def run_get_pet(device, found):
     """
     pet1 → pet2 (1 รอบ)
-    แล้ววนกด pet3/pet4 จนเจอ end-pet → break
-    ระหว่างวน scan รูปใน pet-get/ เพื่อ math (pet-item=trader) → จดลง found แล้ว break ทันที
+    แล้ววนกด pet3/pet4 ไปเรื่อยๆ จนเจอ end-pet (หรือชน LOOP_MAX_SECS) → break
+    ระหว่างวน scan รูปใน pet-get/ เพื่อ math → เจอแล้วจดลง found แต่ "ไม่หยุด/ไม่ clear"
+    วนสุ่มต่อจนครบเงื่อนไข break เอง (เหมือน get-item) — จดได้หลายตัว
     """
     serial = device.serial
     log(serial, "=== GET-PET ===", Fore.GREEN)
@@ -1048,15 +1049,13 @@ def run_get_pet(device, found):
             time.sleep(0.3)
             continue
 
-        # math เพ็ทที่สุ่มได้ → เจอแล้วจบเลย
-        pet_hit = False
+        # math เพ็ทที่สุ่มได้ → จดไว้แล้ว "วนต่อ" (ไม่ break) จนกว่าจะเจอ end-pet
         for fname, name in C.PET_GET_MAP.items():
+            if name in found:
+                continue
             if ImgSearchADB(img, img_path(fname, C.PET_GET_DIR), C.ITEM_MATCH_THRESHOLD):
                 found.add(name)
-                log(serial, f"⭐ get-pet เจอ: {name} ({fname}) → จบ", Fore.GREEN)
-                pet_hit = True
-        if pet_hit:
-            break
+                log(serial, f"⭐ get-pet เจอ: {name} ({fname})", Fore.GREEN)
 
         # end-pet → จบ  (ถ้ายังไม่มีไฟล์ end-pet.bmp จะใช้ safety cap แทน)
         if ImgSearchADB(img, img_path("end-pet.bmp")):

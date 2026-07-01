@@ -1,0 +1,17 @@
+{
+  "steps": {
+    "clean": 1,
+    "restore": 1,
+    "event": 1,
+    "export": 1
+  },
+  "event_rounds": 5,
+  "config_name": "ozx",
+  "input_dir": "input-id",
+  "output_dir": "login-success",
+  "done_dir": "input-id/_done",
+  "failed_dir": "input-id/_failed",
+  "claim_dir": "input-id/_processing",
+  "start_wait": 15,
+  "move_done": 1
+}
