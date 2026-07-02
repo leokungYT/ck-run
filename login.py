@@ -788,15 +788,20 @@ def claim_next_zip(input_dir, my_claim, stale_after=30):
     ตัวตัดสินว่าใครได้ไฟล์ = lock file สร้างด้วย os.open(O_CREAT|O_EXCL):
       - O_EXCL = CREATE_NEW บน Windows → atomic จริง (ทดสอบแล้ว)
         NB: os.rename บน Windows "ไม่" atomic ตอน race — เคยเจอไฟล์เดียวถูก claim ซ้ำ
-      - ใครสร้าง <zip>.lock สำเร็จ = ได้สิทธิ์ย้ายไฟล์ (ถือ lock แค่ช่วง rename แล้วลบ)
+      - ใครสร้าง _locks/<zip>.lock สำเร็จ = ได้สิทธิ์ย้ายไฟล์ (ถือ lock แค่ช่วง rename แล้วลบ)
       - lock ค้างเกิน stale_after วิ (เจ้าของ crash คา) → ยึดมาใหม่ได้
     """
+    # lock ไฟล์เก็บในโฟลเดอร์ย่อย _locks/ (ไม่ปนใน input-id → Explorer ไม่โดน churn จาก lock)
+    lock_dir = os.path.join(input_dir, "_locks")
+    os.makedirs(lock_dir, exist_ok=True)
     while True:
-        zips = sorted(glob.glob(os.path.join(input_dir, "*.zip")))
-        if not zips:
-            return None
-        for z in zips:
-            lock = z + ".lock"
+        found_any = False
+        # os.scandir แบบ lazy: หยุดทันทีที่ claim ไฟล์แรกได้ (ไม่ต้องสแกน/เรียงครบทุกไฟล์)
+        for entry in os.scandir(input_dir):
+            if not entry.name.endswith(".zip") or not entry.is_file():
+                continue
+            found_any = True
+            lock = os.path.join(lock_dir, entry.name + ".lock")
             try:
                 fd = os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
             except FileExistsError:
@@ -811,8 +816,8 @@ def claim_next_zip(input_dir, my_claim, stale_after=30):
                 continue
             os.close(fd)
             try:
-                dest = os.path.join(my_claim, os.path.basename(z))
-                os.rename(z, dest)             # ถือ lock อยู่คนเดียว → ย้ายปลอดภัย
+                dest = os.path.join(my_claim, entry.name)
+                os.rename(entry.path, dest)    # ถือ lock อยู่คนเดียว → ย้ายปลอดภัย แล้วออกทันที
                 return dest
             except OSError:
                 continue                       # ไฟล์หายไปแล้ว → ลองตัวถัดไป
@@ -821,7 +826,9 @@ def claim_next_zip(input_dir, my_claim, stale_after=30):
                     os.remove(lock)            # ปลด lock (ไฟล์ถูกย้ายออกไปแล้ว)
                 except OSError:
                     pass
-        time.sleep(0.05)   # รอบนี้ทุกไฟล์โดน lock อยู่ชั่วขณะ → พักสั้นๆ แล้ววนใหม่
+        if not found_any:
+            return None                        # ไม่มี .zip เหลือแล้ว
+        time.sleep(0.05)   # มีไฟล์แต่โดน lock อยู่ชั่วขณะ → พักสั้นๆ แล้ววนใหม่
 
 
 def worker(serial, input_dir):
