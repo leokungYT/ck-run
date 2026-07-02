@@ -6,11 +6,13 @@ login.py — Cookie Run "login-refresh" แบบ batch
   1) restore : เปิด root → force-stop → ลบข้อมูลเดิม (clean เหมือน main.py)
                → push (คืน) ไฟล์บัญชีจาก zip กลับเข้าเครื่อง → ปิด root
   2) start   : start packet เกม (root ปิดอยู่ → เกมไม่เจอ root)
-  3) event   : run_event_loops (event-back / git-item / ok-gifitem)  ← ถึงตรงนี้ = "login" แล้วหยุด
-  4) export  : เปิด root → ดึงไฟล์บัญชี (เหมือนตอน backup เจอ id) → zip เก็บใน login-success/ → ปิด root
-  5) ย้าย zip ต้นทางไป input-id/_done/ แล้วไปหยิบไฟล์ถัดไปจาก input-id/
+  3) event   : run_event_loops (event-back / git-item / ok-gifitem)  ← login เสร็จ
+  4) box     : run_boxes (รับของ box1-5)                              [ถ้า box=1]
+  5) maxpet  : run_maxpet (กด pet1 → swipe 5 รอบ → สุ่มเพ็ทจนเจอ trader) [ถ้า maxpet=1]
+  6) export  : เปิด root → ดึงไฟล์บัญชี (เหมือนตอน backup เจอ id) → zip เก็บใน login-success/ → ปิด root
+  7) ย้าย zip ต้นทางไป input-id/_done/ แล้วไปหยิบไฟล์ถัดไปจาก input-id/
 
-engine (คลิกรูป / ADB / root toggle / event / pull) ใช้ซ้ำจาก main.py
+engine (คลิกรูป / ADB / root toggle / event / boxes / get-pet / pull) ใช้ซ้ำจาก main.py
 ตัว restore (push ไฟล์กลับ) พอร์ตมาจาก push-file-ck/push-file.py
 
 เปิด/ปิดแต่ละ step ผ่าน config-main.json (แยกจาก configmain.json ของ main.py)
@@ -56,11 +58,15 @@ NO_WINDOW = {'creationflags': subprocess.CREATE_NO_WINDOW} if os.name == 'nt' el
 LOGIN_CONFIG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config-main.json")
 
 DEFAULTS = {
-    "steps": {"clean": 1, "restore": 1, "event": 1, "export": 1},
+    "steps": {"clean": 1, "restore": 1, "event": 1, "box": 1,
+              "maxgacha": 1, "maxpet": 1, "export": 1},
     "event_rounds": C.EVENT_LOOP_ROUNDS,
     "config_name": C.CUSTOM_CONFIG_NAME,
     "input_dir": "input-id",
     "output_dir": "login-success",
+    "backup_id_dir": "backup-id",
+    "random_fail_dir": "random-Fail",
+    "login_failed_dir": "login-failed",
     "done_dir": "input-id/_done",
     "failed_dir": "input-id/_failed",
     "claim_dir": "input-id/_processing",
@@ -84,6 +90,7 @@ def load_login_config():
                 if key in cfg["steps"]:
                     cfg["steps"][key] = 1 if v else 0
             for k in ("event_rounds", "config_name", "input_dir", "output_dir",
+                      "backup_id_dir", "random_fail_dir", "login_failed_dir",
                       "done_dir", "failed_dir", "claim_dir", "start_wait", "move_done"):
                 if k in loaded:
                     cfg[k] = loaded[k]
@@ -299,7 +306,385 @@ def move_zip(zpath, dest_dir):
 
 
 # ═══════════════════════════════════════════════════════════════════════
-#  ทำงาน 1 บัญชี : restore → start → event → export
+#  STEP: maxpet — get-pet เวอร์ชัน login (หลังกด pet1 → swipe 5 รอบ ก่อนหา pet2)
+#  ตรรกะ match/break เหมือน main.run_get_pet: weak (RECORD_ALONE) จดแล้ววนต่อ,
+#  strong (trader) เจอแล้วจบ — แยกไว้ที่นี่เพื่อไม่แตะ get-pet ของ main.py
+# ═══════════════════════════════════════════════════════════════════════
+PET_SWIPE = (279, 348, 737, 334)   # (x1,y1)→(x2,y2) ท่า swipe หลังกด pet1
+PET_SWIPE_ROUNDS = 5               # กี่รอบ
+PET_SWIPE_MS = 300                 # เวลาลาก 1 รอบ (มิลลิวินาที)
+
+
+def run_maxpet(device, found):
+    serial = device.serial
+    M.log(serial, "=== MAX-PET (login) ===", Fore.GREEN)
+
+    M.wait_and_click(device, "pet1.bmp", post_delay=1.5)
+
+    # หลังกด pet1 → swipe (279,348)→(737,334) 5 รอบ ก่อนไปหา pet2
+    x1, y1, x2, y2 = PET_SWIPE
+    for i in range(PET_SWIPE_ROUNDS):
+        if not M.bot_running:
+            return
+        M.log(serial, f"swipe {i+1}/{PET_SWIPE_ROUNDS} ({x1},{y1})→({x2},{y2})", Fore.CYAN)
+        device.shell(f"input swipe {x1} {y1} {x2} {y2} {PET_SWIPE_MS}")
+        time.sleep(0.5)
+
+    M.wait_and_click(device, "pet2.bmp", post_delay=1.5)
+
+    start = time.time()
+    while time.time() - start < C.LOOP_MAX_SECS:
+        if not M.bot_running:
+            return
+        img = M.fast_screencap(device)
+        if img is None:
+            time.sleep(0.3)
+            continue
+
+        # math เพ็ทที่สุ่มได้ → จดไว้ (ไม่ clear) แล้ววนต่อ | strong (trader) → จบเลย
+        pet_hit = False
+        for fname, name in C.PET_GET_MAP.items():
+            if name in found:
+                continue
+            if M.ImgSearchADB(img, M.img_path(fname, C.PET_GET_DIR), C.ITEM_MATCH_THRESHOLD):
+                found.add(name)
+                strong = (name not in C.RECORD_ALONE) or (C.RECORD_ALONE.get(name) is True)
+                M.log(serial, f"⭐ maxpet เจอ: {name} ({fname})"
+                              + (" → จบ" if strong else " (วนต่อ)"), Fore.GREEN)
+                if strong:
+                    pet_hit = True
+        if pet_hit:
+            break
+
+        # end-pet → จบ (ไม่มีไฟล์ end-pet.bmp ก็ใช้ safety cap แทน)
+        if M.ImgSearchADB(img, M.img_path("end-pet.bmp")):
+            M.log(serial, "เจอ end-pet → จบ maxpet")
+            break
+
+        pts3 = M.ImgSearchADB(img, M.img_path("pet3.bmp"))
+        if pts3:
+            M.tap(device, *pts3[0])
+            time.sleep(0.6)
+        pts4 = M.ImgSearchADB(img, M.img_path("pet4.bmp"))
+        if pts4:
+            M.tap(device, *pts4[0])
+            time.sleep(3)
+        time.sleep(0.3)
+
+
+# ═══════════════════════════════════════════════════════════════════════
+#  STEP: event — event loop เวอร์ชัน login (appear timeout สั้นลง ให้ข้ามไว)
+#  ใช้ handle_repeating ของ main.py แต่ override appear_timeout = EVENT_APPEAR_TIMEOUT
+#  (default ใน main ถูก bind ตอน import แล้ว → แก้ C.APPEAR_TIMEOUT ทีหลังไม่มีผล
+#   จึงต้องส่ง appear_timeout ตรงๆ ที่นี่)
+# ═══════════════════════════════════════════════════════════════════════
+EVENT_APPEAR_TIMEOUT = 3   # รอรูป event โผล่ครั้งแรกกี่วิ (ไม่โผล่ → ข้าม)
+EVENT_NAMES = ("event-back.bmp", "git-item.bmp", "ok-gifitem.bmp", "fixnews.bmp")
+
+EVENT_CHECKPOINT = "check-pointevent.bmp"   # รูป checkpoint ก่อนเข้าหน้า event
+EVENT_CHECKPOINT_TIMEOUT = 60               # รอ checkpoint กี่วิ (ไม่เจอ → เริ่ม event เลย)
+
+
+def wait_event_checkpoint(device):
+    """รอ check-pointevent.bmp โผล่ก่อนเริ่ม EVENT LOOP (เจอ = เกมโหลดถึงหน้า event แล้ว)
+    ไม่เจอใน timeout → เริ่ม event เลย (กันค้าง)"""
+    serial = device.serial
+    path = M.img_path(EVENT_CHECKPOINT)
+    M.log(serial, f"รอ checkpoint event ({EVENT_CHECKPOINT})...", Fore.CYAN)
+    start = time.time()
+    while time.time() - start < EVENT_CHECKPOINT_TIMEOUT:
+        if not M.bot_running:
+            return False
+        img = M.fast_screencap(device)
+        if M.ImgSearchADB(img, M.img_path(LOGIN_FAILED_IMG)):
+            raise LoginFailed()
+        if M.ImgSearchADB(img, path):
+            M.log(serial, "เจอ checkpoint event → เริ่ม EVENT LOOP", Fore.GREEN)
+            return True
+        time.sleep(0.3)
+    M.log(serial, f"ไม่เจอ checkpoint event ใน {EVENT_CHECKPOINT_TIMEOUT}s → เริ่ม EVENT LOOP เลย", Fore.YELLOW)
+    return False
+
+
+def run_event_loops(device):
+    serial = device.serial
+    for rnd in range(1, C.EVENT_LOOP_ROUNDS + 1):
+        _raise_if_login_failed(device)   # เจอ login-failed ระหว่าง event → ยกเลิกบัญชี
+        M.log(serial, f"=== EVENT LOOP รอบ {rnd}/{C.EVENT_LOOP_ROUNDS} ===", Fore.GREEN)
+        for name in EVENT_NAMES:
+            M.handle_repeating(device, name, appear_timeout=EVENT_APPEAR_TIMEOUT)
+
+
+# ═══════════════════════════════════════════════════════════════════════
+#  STEP: box — รับของ box เวอร์ชัน login
+#  box1 → box2 → box3 (timeout 15s) : ไม่เจอ box3 ใน 15 วิ → ข้ามไป box5 แล้วจบ step
+#                                     เจอ box3 → box4 → box5 ตามปกติ
+#  (แยกไว้ที่นี่เพื่อไม่แตะ run_boxes ของ main.py)
+# ═══════════════════════════════════════════════════════════════════════
+BOX3_TIMEOUT = 15   # ไม่เจอ box3 กี่วิ ให้ข้ามไป box5 แล้วจบ
+
+
+def run_boxes(device):
+    serial = device.serial
+    M.log(serial, "=== รับของ BOX (login) ===", Fore.GREEN)
+
+    M.wait_and_click(device, "box1.bmp", post_delay=1.5)
+    M.wait_and_click(device, "box2.bmp", post_delay=1.5)
+
+    # ไม่เจอ box3 ใน BOX3_TIMEOUT วิ → ข้ามไป box5 แล้วจบ step เลย
+    if not M.wait_and_click(device, "box3.bmp", timeout=BOX3_TIMEOUT, required=False, post_delay=1.5):
+        M.log(serial, f"ไม่เจอ box3 ครบ {BOX3_TIMEOUT} วิ → ข้ามไป box5 แล้วจบ box", Fore.YELLOW)
+        M.wait_and_click(device, "box5.bmp", post_delay=1.5)
+        return
+
+    # เจอ box3 → box4 → box5 ตามปกติ
+    for i in range(4, 6):
+        M.wait_and_click(device, f"box{i}.bmp", post_delay=1.5)
+
+
+# ═══════════════════════════════════════════════════════════════════════
+#  STEP: maxgacha — สุ่มกาชาแบบ item (template อยู่ใน img/max-gacha/)
+#  ลำดับ:
+#   maxgacha1 → disk-full → maxgacha2
+#   → maxgacha3 (15วิ)?  เจอ  : วน (maxgacha-step1 + สแกน ITEM) จนไม่เจอ maxgacha3 15วิ
+#                         ไม่เจอ: maxgacha4 → disk-full → maxgacha5 (รัวจนหาย 5วิ)+สแกน ITEM  [#step-ruby]
+#   → draw-agin loop: draw-agin → disk-full → ok-get (รัวจนหาย 5วิ) วนจนเจอ stop-ruby → cancel1 → cancel2
+#   → step2: get-random25 → disk-full → ok-getstep2 (รัวจนเจอ stop-step2) → cancel-step2 (+v1/v2/v3)
+#  จดชื่อ ITEM_GET_MAP ที่ math ได้ลง found (เอาไปตั้งชื่อไฟล์ตอน export)
+#  ⚠️ ต้องเพิ่มรูป maxgacha-step1.bmp + stop-ruby.bmp (ยังไม่มี — ตอนนี้จะข้าม/พึ่ง safety cap)
+# ═══════════════════════════════════════════════════════════════════════
+MAXGACHA_DIR = "img/max-gacha"
+
+
+def _mg_click(device, name, timeout=C.PLAY_STEP_TIMEOUT, post_delay=1.2):
+    """คลิกรูปในโฟลเดอร์ max-gacha (required=False → ไม่เจอก็ข้าม)"""
+    return M.wait_and_click(device, name, timeout=timeout, required=False,
+                            post_delay=post_delay, folder=MAXGACHA_DIR)
+
+
+def _mg_disk_full(device):
+    """แวะหา disk-full1 (5วิ) ไม่เจอข้าม; เจอ → disk-full2 → disk-full3 → fixdisk1 → fixdisk2"""
+    if _mg_click(device, "disk-full1.bmp", timeout=5):
+        _mg_click(device, "disk-full2.bmp", timeout=10)
+        _mg_click(device, "disk-full3.bmp", timeout=10)
+        _mg_click(device, "fixdisk1.bmp", timeout=10)
+        _mg_click(device, "fixdisk2.bmp", timeout=10)
+
+
+def _mg_scan_items(device, found, img=None):
+    """สแกน ITEM_GET_MAP บนจอ → จดชื่อที่ match ลง found (ไม่ clear ของเดิม)"""
+    if img is None:
+        img = M.fast_screencap(device)
+    if img is None:
+        return
+    for fname, name in C.ITEM_GET_MAP.items():
+        if name in found:
+            continue
+        if M.ImgSearchADB(img, M.img_path(fname, C.ITEM_GET_DIR), C.ITEM_MATCH_THRESHOLD):
+            found.add(name)
+            M.log(device.serial, f"⭐ maxgacha เจอ: {name} ({fname})", Fore.GREEN)
+
+
+def _mg_spam_until_gone(device, name, absent=5, found=None):
+    """กด name รัวๆ จนไม่เจอติดต่อกัน absent วิ (สแกน ITEM ระหว่างวนถ้าส่ง found)"""
+    path = M.img_path(name, MAXGACHA_DIR)
+    last_seen = time.time()
+    while M.bot_running and time.time() - last_seen < absent:
+        img = M.fast_screencap(device)
+        if found is not None:
+            _mg_scan_items(device, found, img)
+        pts = M.ImgSearchADB(img, path)
+        if pts:
+            M.tap(device, *pts[0])
+            last_seen = time.time()
+        time.sleep(0.4)
+
+
+def _mg_draw_again(device):
+    """draw-agin → disk-full → ok-get (รัวจนหาย 5วิ) วนไปจนเจอ stop-ruby → cancel1 → cancel2"""
+    serial = device.serial
+    M.log(serial, "--- draw-agin loop ---", Fore.MAGENTA)
+    start = time.time()
+    while M.bot_running and time.time() - start < C.LOOP_MAX_SECS:
+        img = M.fast_screencap(device)
+        # เจอ stop-step2 → cancel-step2 → cancel-step2v1 → break ออกไป get-random25 (step2) เลย
+        if M.ImgSearchADB(img, M.img_path("stop-step2.bmp", MAXGACHA_DIR)):
+            M.log(serial, "เจอ stop-step2 → cancel-step2 → cancel-step2v1 → ไป get-random25", Fore.GREEN)
+            _mg_click(device, "cancel-step2.bmp")
+            _mg_click(device, "cancel-step2v1.bmp")
+            return
+        # เจอ stop-ruby → cancel1 → cancel2
+        if M.ImgSearchADB(img, M.img_path("stop-ruby.bmp", MAXGACHA_DIR)):
+            M.log(serial, "เจอ stop-ruby → cancel1 → cancel2", Fore.GREEN)
+            _mg_click(device, "cancel1.bmp")
+            _mg_click(device, "cancel2.bmp")
+            return
+        if _mg_click(device, "draw-agin.bmp", timeout=5):
+            _mg_disk_full(device)
+            _mg_spam_until_gone(device, "ok-get.bmp", absent=5)
+        else:
+            break   # ไม่เจอ draw-agin แล้ว → ออก
+    M.log(serial, "จบ draw-agin loop", Fore.CYAN)
+
+
+def _mg_step2(device, absent=8):
+    """get-random25 → disk-full → ok-getstep2 (รัวจนเจอ stop-step2) → cancel-step2 (+v1/v2/v3)
+    ออกจากลูปเมื่อ: เจอ stop-step2 | ไม่เจอ ok-getstep2/stop-step2 ครบ absent วิ | ชน LOOP_MAX_SECS"""
+    serial = device.serial
+    M.log(serial, "=== STEP2 ===", Fore.GREEN)
+    if not _mg_click(device, "get-random25.bmp", timeout=15):
+        M.log(serial, "ไม่เจอ get-random25 → กด fix-random25 แล้วหา get-random25 ใหม่", Fore.YELLOW)
+        _mg_click(device, "fix-random25.bmp", timeout=10)
+        if not _mg_click(device, "get-random25.bmp", timeout=15):
+            M.log(serial, "⚠️ ยังไม่เจอ get-random25 หลัง fix-random25 (หน้า step2 อาจยังไม่เปิด)", Fore.YELLOW)
+    _mg_disk_full(device)
+
+    start = last_action = time.time()
+    clicks = 0
+    while M.bot_running and time.time() - start < C.LOOP_MAX_SECS:
+        img = M.fast_screencap(device)
+        if M.ImgSearchADB(img, M.img_path("stop-step2.bmp", MAXGACHA_DIR)):
+            M.log(serial, f"เจอ stop-step2 (กด ok-getstep2 ไป {clicks} ครั้ง) → cancel-step2", Fore.GREEN)
+            break
+        pts = M.ImgSearchADB(img, M.img_path("ok-getstep2.bmp", MAXGACHA_DIR))
+        if pts:
+            M.tap(device, *pts[0])
+            clicks += 1
+            last_action = time.time()
+        elif time.time() - last_action > absent:
+            M.log(serial, f"ไม่เจอ ok-getstep2/stop-step2 ครบ {absent}s (กดไป {clicks} ครั้ง) → จบ step2", Fore.YELLOW)
+            break
+        time.sleep(0.4)
+    for n in ("cancel-step2.bmp", "cancel-step2v1.bmp", "cancel-step2v2.bmp", "cancel-step2v3.bmp"):
+        _mg_click(device, n)
+
+
+def _mg_stop_step2_jump(device, timeout=3):
+    """เจอ stop-step2 ภายใน timeout → กด cancel-step2 → cancel-step2v1 แล้วคืน True (ให้ข้ามไป step2)"""
+    path = M.img_path("stop-step2.bmp", MAXGACHA_DIR)
+    start = time.time()
+    while M.bot_running and time.time() - start < timeout:
+        if M.ImgSearchADB(M.fast_screencap(device), path):
+            M.log(device.serial, "เจอ stop-step2 → cancel-step2 → cancel-step2v1 → ไป get-random25", Fore.GREEN)
+            _mg_click(device, "cancel-step2.bmp")
+            _mg_click(device, "cancel-step2v1.bmp")
+            return True
+        time.sleep(0.3)
+    return False
+
+
+def run_maxgacha(device, found):
+    serial = device.serial
+    M.log(serial, "=== MAX-GACHA ===", Fore.GREEN)
+
+    _mg_click(device, "maxgacha1.bmp")
+    _mg_disk_full(device)
+    _mg_click(device, "maxgacha2.bmp")
+
+    if _mg_click(device, "maxgacha3.bmp", timeout=15):
+        # เจอ maxgacha3 → วน (maxgacha-step1 + สแกน ITEM) จนไม่เจอ maxgacha3 15วิ
+        while M.bot_running:
+            _mg_click(device, "maxgacha-step1.bmp", timeout=10)   # ⚠️ ยังไม่มีรูปนี้
+            _mg_scan_items(device, found)
+            if not _mg_click(device, "maxgacha3.bmp", timeout=15):
+                break
+        M.log(serial, "จบลูป maxgacha3 → ไปต่อ", Fore.CYAN)
+    else:
+        # ไม่เจอ maxgacha3 → maxgacha4 → #step-ruby (maxgacha5 loop)
+        M.log(serial, "ไม่เจอ maxgacha3 → maxgacha4 (#step-ruby)", Fore.YELLOW)
+        _mg_click(device, "maxgacha4.bmp", timeout=15)
+        # กด maxgacha4 แล้วเจอ stop-step2 → cancel → ข้ามไป get-random25 (step2) เลย
+        if _mg_stop_step2_jump(device):
+            _mg_step2(device)
+            return
+        _mg_disk_full(device)
+        _mg_spam_until_gone(device, "maxgacha5.bmp", absent=5, found=found)
+
+    # common tail
+    _mg_draw_again(device)
+    _mg_step2(device)
+
+
+# ═══════════════════════════════════════════════════════════════════════
+#  ตัดสินชื่อไฟล์ + โฟลเดอร์ปลายทางตอน export
+#  กติกา (trader เป็นหลัก):
+#    - มี trader (สุ่มได้รอบนี้ หรือมีในชื่อไฟล์เดิมอยู่แล้ว) → backup-id
+#      ชื่อ = รวมทุกชิ้น (ของเดิม + เพ็ทที่สุ่มได้) เรียงตาม ITEM→PET เช่น banana+trader+[ID]+
+#    - maxpet เปิดแต่ไม่มี trader → random-Fail (ชื่อเดิม)
+#    - maxpet ปิด (ไม่ได้สุ่ม) และไม่มี trader → login-success (ชื่อเดิม)
+# ═══════════════════════════════════════════════════════════════════════
+def _split_orig_name(base):
+    """แยกชื่อไฟล์เดิม → (list ชื่อของก่อน [ID], ส่วน [ID] ท้าย)
+    เช่น 'banana+[BCVZL1719]+' → (['banana'], '[BCVZL1719]+')"""
+    i = base.find("[")
+    if i == -1:
+        prefix, id_suffix = base.rstrip("+"), ""
+    else:
+        prefix, id_suffix = base[:i].rstrip("+"), base[i:]
+    pieces = [p for p in prefix.split("+") if p]
+    return pieces, id_suffix
+
+
+def _combine_name(base, found):
+    """เติมชื่อที่เจอ (found) หน้าชื่อไฟล์เดิม เรียง canonical (ITEM ก่อน PET)
+    เช่น base='headking+[ID]+', found={backpack,banana} → 'backpack+banana+headking+[ID]+'
+    ถ้าไม่มีของใหม่ (found ⊆ ของเดิม) → คงชื่อเดิม"""
+    orig_pieces, id_suffix = _split_orig_name(base)
+    new_pieces = [p for p in found if p not in orig_pieces]
+    if not new_pieces:
+        return base
+    all_set = set(orig_pieces) | set(found)
+    order = M.ordered_names()
+    name_pieces = [n for n in order if n in all_set]
+    for p in orig_pieces:
+        if p not in order and p not in name_pieces:
+            name_pieces.append(p)
+    prefix = "+".join(name_pieces)
+    return f"{prefix}+{id_suffix}" if id_suffix else prefix
+
+
+def decide_login_export(base, found, maxpet_on):
+    """คืน (out_name, out_dir) ตามกติกา trader (ใช้เส้นทาง maxpet)"""
+    orig_pieces, _ = _split_orig_name(base)
+    if "trader" in (set(orig_pieces) | set(found)):
+        return _combine_name(base, found), LOGIN["backup_id_dir"]
+    if maxpet_on:
+        return base, LOGIN["random_fail_dir"]
+    return base, LOGIN["output_dir"]
+
+
+# ═══════════════════════════════════════════════════════════════════════
+#  login-failed watchdog — เจอหน้า login-failed เมื่อไหร่ → ยกเลิกบัญชีนี้
+#  clear app → export บัญชี (ชื่อเดิม) เข้า login-failed/ แล้วไป id ถัดไป
+# ═══════════════════════════════════════════════════════════════════════
+LOGIN_FAILED_IMG = "login-failed.bmp"
+
+
+class LoginFailed(Exception):
+    """โยนเมื่อเจอหน้า login-failed → process_account จับแล้วจัดการ"""
+
+
+def login_failed_seen(device):
+    return bool(M.ImgSearchADB(M.fast_screencap(device), M.img_path(LOGIN_FAILED_IMG)))
+
+
+def _raise_if_login_failed(device):
+    if login_failed_seen(device):
+        raise LoginFailed()
+
+
+def handle_login_failed(device, serial, base):
+    """clear app → export บัญชี (ชื่อเดิม) เข้า login-failed/ (input จัดการโดย worker)"""
+    M.log(serial, "⚠️ เจอ login-failed → clear app → เก็บเข้า login-failed/ (ชื่อเดิม)", Fore.RED)
+    M.close_app(device)
+    device = M.enable_root(device)
+    export_login_zip(device, base, LOGIN["login_failed_dir"])
+    device = M.disable_root(device)
+
+
+# ═══════════════════════════════════════════════════════════════════════
+#  ทำงาน 1 บัญชี : restore → start → event → box → maxgacha → export
+#  (ระหว่าง login เจอ login-failed → เก็บเข้า login-failed/ แล้วไป id ถัดไป)
 # ═══════════════════════════════════════════════════════════════════════
 def process_account(device, serial, zpath):
     name = os.path.basename(zpath)
@@ -321,17 +706,49 @@ def process_account(device, serial, zpath):
     M.start_game(device)
     time.sleep(LOGIN["start_wait"])
 
-    # 3) event loops — ถึงตรงนี้ถือว่า login แล้ว → หยุด (ไม่ทำ boxes/get-item/get-pet)
-    if step_on("event"):
-        M.run_event_loops(device)
+    found = set()
+    try:
+        _raise_if_login_failed(device)   # เจอ login-failed ตั้งแต่หลัง start → ยกเลิก
 
-    M.log(serial, "ถึง login แล้ว → หยุดการทำงานฝั่งเกม", Fore.CYAN)
+        # 3) event loops — รอ checkpoint event ให้เจอก่อน ค่อยเริ่ม EVENT LOOP
+        if step_on("event"):
+            wait_event_checkpoint(device)
+            run_event_loops(device)
+        M.log(serial, "login เสร็จ → ทำ config เพิ่ม (box / maxgacha)", Fore.CYAN)
 
-    # 4) export ไฟล์บัญชี (ที่อัปเดตแล้ว) ออกมาเก็บใน login-success/
+        # 4) box — box1 → box2 → box3 (ไม่เจอ 15 วิ → กด box5 แล้วจบ) → box4-5 (ถ้า box=1)
+        if step_on("box"):
+            run_boxes(device)
+
+        # 5) maxgacha — สุ่มกาชา item (ถ้า maxgacha=1) จดชื่อ item ที่ math ได้ลง found
+        if step_on("maxgacha"):
+            run_maxgacha(device, found)
+
+        # 6) maxpet — กด pet1 → swipe 5 รอบ → สุ่มเพ็ทจนเจอ trader (ถ้า maxpet=1)
+        if step_on("maxpet"):
+            run_maxpet(device, found)
+    except LoginFailed:
+        handle_login_failed(device, serial, base)
+        return True
+
+    # 7) export — ตัดสินชื่อ/ปลายทาง (ทำหลัง step2 → ไม่ clear app ก่อนถึง step2)
+    #    maxgacha: เจอ item → backup-id (ชื่อ = item + เดิม) | สุ่มไม่ได้อะไรเลย → random-Fail (ชื่อเดิม)
+    #    ไม่งั้น → กติกา trader (decide_login_export)
     if step_on("export"):
+        if step_on("maxgacha"):
+            if found:
+                out_name, out_dir = _combine_name(base, found), LOGIN["backup_id_dir"]
+            else:
+                out_name, out_dir = base, LOGIN["random_fail_dir"]
+        elif step_on("maxpet"):
+            out_name, out_dir = decide_login_export(base, found, True)
+        else:
+            out_name, out_dir = base, LOGIN["output_dir"]
+        M.log(serial, f"→ เก็บ {out_name}.zip ใน {out_dir}/", Fore.GREEN)
+
         M.close_app(device)
         device = M.enable_root(device)
-        out = export_login_zip(device, base, LOGIN["output_dir"])
+        out = export_login_zip(device, out_name, out_dir)
         device = M.disable_root(device)
         if out is None:
             M.log(serial, f"└─ export ล้มเหลว → เก็บ {name} ไว้ที่เดิม", Fore.RED)
@@ -346,9 +763,9 @@ def process_account(device, serial, zpath):
 # ═══════════════════════════════════════════════════════════════════════
 #  MAIN — แต่ละเครื่อง "claim" zip จาก input-id/ แบบ atomic (กันแย่งไฟล์เดียวกัน)
 #
-#  วิธี claim: os.rename ย้ายไฟล์ออกจาก input-id/ → input-id/_processing/<serial>/
-#  - os.rename เป็น atomic ระดับ filesystem: 2 คนย้าย source เดียวกัน มีคนเดียวสำเร็จ
-#    อีกคน source หายแล้ว → OSError → ข้ามไปตัวถัดไป
+#  วิธี claim: lock file (os.open O_CREAT|O_EXCL) เป็นตัวตัดสิน แล้วย้ายไฟล์เข้า
+#  input-id/_processing/<serial>/  (ดูรายละเอียดใน claim_next_zip)
+#  - O_EXCL atomic จริงบน Windows (os.rename ไม่ atomic ตอน race — ทดสอบแล้ว)
 #  - กันได้ทั้ง "หลาย thread ในโปรเซสเดียว" และ "หลายโปรเซส/เปิดหลายหน้าต่างพร้อมกัน"
 #  - ไฟล์ที่ claim อยู่ใน _processing/<serial>/ จนกว่าจะเสร็จ → เห็นชัดว่าเครื่องไหนถืออะไร
 #    ถ้า crash กลางคัน ไฟล์ค้างอยู่ตรงนั้น รอบหน้าเครื่องเดิมหยิบมาทำต่อได้ (recover)
