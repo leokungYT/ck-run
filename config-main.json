@@ -19,5 +19,6 @@
   "failed_dir": "input-id/_failed",
   "claim_dir": "input-id/_processing",
   "start_wait": 15,
-  "move_done": 1
+  "move_done": 1,
+  "shard_size": 500
 }

@@ -37,10 +37,12 @@ import glob
 import json
 import time
 import shutil
+import signal
 import zipfile
 import tempfile
 import threading
 import subprocess
+import multiprocessing as mp
 
 import config as C
 import main as M
@@ -72,6 +74,7 @@ DEFAULTS = {
     "claim_dir": "input-id/_processing",
     "start_wait": 15,
     "move_done": 1,
+    "shard_size": 500,   # แบ่ง output เป็นโฟลเดอร์ย่อย part-XXXX ละกี่ไฟล์ (0 = ไม่แบ่ง)
 }
 LOGIN = dict(DEFAULTS)
 
@@ -91,7 +94,8 @@ def load_login_config():
                     cfg["steps"][key] = 1 if v else 0
             for k in ("event_rounds", "config_name", "input_dir", "output_dir",
                       "backup_id_dir", "random_fail_dir", "login_failed_dir",
-                      "done_dir", "failed_dir", "claim_dir", "start_wait", "move_done"):
+                      "done_dir", "failed_dir", "claim_dir", "start_wait",
+                      "move_done", "shard_size"):
                 if k in loaded:
                     cfg[k] = loaded[k]
             print(f"{Fore.GREEN}[CONFIG] โหลด {os.path.basename(LOGIN_CONFIG_FILE)} แล้ว{Style.RESET_ALL}")
@@ -102,6 +106,7 @@ def load_login_config():
 
     cfg["event_rounds"] = int(cfg["event_rounds"])
     cfg["start_wait"] = int(cfg["start_wait"])
+    cfg["shard_size"] = int(cfg["shard_size"])
     cfg["config_name"] = str(cfg["config_name"]).strip() or C.CUSTOM_CONFIG_NAME
     cfg["move_done"] = 1 if cfg["move_done"] else 0
     LOGIN = cfg
@@ -653,6 +658,26 @@ def decide_login_export(base, found, maxpet_on):
     return base, LOGIN["output_dir"]
 
 
+def _shard_dir(base_dir):
+    """คืนโฟลเดอร์ย่อย part-XXXX ใน base_dir ที่ยังมีไฟล์ < shard_size
+    กันไฟล์กระจุกในโฟลเดอร์เดียวเป็นพันจน Explorer ค้าง (shard_size=0 → ไม่แบ่ง คืน base_dir เดิม)"""
+    size = LOGIN.get("shard_size", 500)
+    os.makedirs(base_dir, exist_ok=True)
+    if not size or size <= 0:
+        return base_dir
+    # เริ่มจาก part สูงสุดที่มีอยู่ (ไม่ต้องไล่นับจาก 1 ทุกครั้ง)
+    existing = [e.name[5:] for e in os.scandir(base_dir)
+                if e.is_dir() and e.name.startswith("part-") and e.name[5:].isdigit()]
+    i = max((int(n) for n in existing), default=1)
+    while True:
+        d = os.path.join(base_dir, f"part-{i:04d}")
+        os.makedirs(d, exist_ok=True)
+        n = sum(1 for e in os.scandir(d) if e.name.endswith(".zip"))
+        if n < size:
+            return d
+        i += 1
+
+
 # ═══════════════════════════════════════════════════════════════════════
 #  login-failed watchdog — เจอหน้า login-failed เมื่อไหร่ → ยกเลิกบัญชีนี้
 #  clear app → export บัญชี (ชื่อเดิม) เข้า login-failed/ แล้วไป id ถัดไป
@@ -678,7 +703,7 @@ def handle_login_failed(device, serial, base):
     M.log(serial, "⚠️ เจอ login-failed → clear app → เก็บเข้า login-failed/ (ชื่อเดิม)", Fore.RED)
     M.close_app(device)
     device = M.enable_root(device)
-    export_login_zip(device, base, LOGIN["login_failed_dir"])
+    export_login_zip(device, base, _shard_dir(LOGIN["login_failed_dir"]))
     device = M.disable_root(device)
 
 
@@ -744,6 +769,7 @@ def process_account(device, serial, zpath):
             out_name, out_dir = decide_login_export(base, found, True)
         else:
             out_name, out_dir = base, LOGIN["output_dir"]
+        out_dir = _shard_dir(out_dir)   # แบ่งเป็น part-XXXX กันไฟล์กระจุกจน Explorer ค้าง
         M.log(serial, f"→ เก็บ {out_name}.zip ใน {out_dir}/", Fore.GREEN)
 
         M.close_app(device)
@@ -831,12 +857,14 @@ def claim_next_zip(input_dir, my_claim, stale_after=30):
         time.sleep(0.05)   # มีไฟล์แต่โดน lock อยู่ชั่วขณะ → พักสั้นๆ แล้ววนใหม่
 
 
-def worker(serial, input_dir):
+def _worker_loop(serial, input_dir):
+    """ลูปหลักต่อ 1 เครื่อง: claim → process_account → ย้ายไฟล์ จนคิวหมด. คืน (done, fail)"""
     device = AdbClient(host="127.0.0.1", port=5037).device(serial)
     if device is None:
         M.log(serial, "ERROR: เชื่อมต่อ device ไม่ได้", Fore.RED)
-        return
+        return 0, 0
     my_claim = claim_dir_for(serial)
+    done = fail = 0
 
     while M.bot_running:
         # 1) เก็บงานค้างของ "เครื่องตัวเอง" ก่อน (เผื่อรอบก่อน crash ค้างใน _processing)
@@ -859,8 +887,7 @@ def worker(serial, input_dir):
 
         # ย้ายไฟล์ที่ claim ไว้ ออกจาก _processing ตามผลลัพธ์ (ต้องย้ายออกเสมอ กันวนซ้ำ)
         if ok:
-            with STATS_LOCK:
-                STATS["done"] += 1
+            done += 1
             if LOGIN["move_done"]:
                 move_zip(zpath, LOGIN["done_dir"])     # เก็บไฟล์บัญชีเดิมไว้ที่ _done
             else:
@@ -869,11 +896,47 @@ def worker(serial, input_dir):
                 except OSError:
                     pass
         else:
-            with STATS_LOCK:
-                STATS["fail"] += 1
+            fail += 1
             move_zip(zpath, LOGIN["failed_dir"])       # เก็บไว้ตรวจสอบ
 
     M.log(serial, "ไม่มีไฟล์เหลือให้ claim → จบการทำงานเครื่องนี้", Fore.GREEN)
+    return done, fail
+
+
+def worker(serial, input_dir):
+    """เวอร์ชัน thread (ใช้โดย login-gui.py) — รวมผลลง STATS"""
+    done, fail = _worker_loop(serial, input_dir)
+    with STATS_LOCK:
+        STATS["done"] += done
+        STATS["fail"] += fail
+
+
+# ═══════════════════════════════════════════════════════════════════════
+#  multiprocess: 1 process / 1 เครื่อง — ลื่นสุดสำหรับหลายจอ (เลี่ยง GIL)
+#  ระบบ claim ไฟล์ (lock) ทำงานข้าม process ได้อยู่แล้ว → พฤติกรรมเหมือนเดิม
+# ═══════════════════════════════════════════════════════════════════════
+def _stop_watcher(stop_event):
+    """thread เล็กๆ ในแต่ละ process: parent สั่ง stop → ตั้ง M.bot_running=False
+    (ลูปเดิมที่เช็ค bot_running จะหยุดเองหลังจบบัญชีปัจจุบัน)"""
+    stop_event.wait()
+    M.bot_running = False
+
+
+def device_worker(serial, index, input_dir, stop_event, result_q):
+    """entry ของแต่ละ process — ตั้งค่า ADB/root/priority ของตัวเอง แล้ววนทำงาน"""
+    signal.signal(signal.SIGINT, signal.SIG_IGN)   # ปล่อยให้ parent จัดการ Ctrl+C (ผ่าน stop_event)
+    load_login_config()
+    M.find_adb_executable()
+    M.set_process_priority()                       # BELOW_NORMAL → สละ CPU ให้ UI ลื่น
+    M.MUMU_MANAGER_PATH = M.find_mumu_manager() or ""
+    if index:
+        M.SERIAL_TO_INDEX[serial] = index          # ให้ root toggle ตรง instance ของตัวเอง
+    M.bot_running = True
+    threading.Thread(target=_stop_watcher, args=(stop_event,), daemon=True).start()
+    M._adb_connect(serial)                          # ให้แน่ใจว่า adb ต่อเครื่องนี้อยู่
+
+    done, fail = _worker_loop(serial, input_dir)
+    result_q.put((serial, done, fail))
 
 
 def main():
@@ -900,28 +963,44 @@ def main():
     if not devices:
         print(f"{Fore.RED}[ERROR] ไม่เจอ device{Style.RESET_ALL}")
         return
+    dev_idx = [(s, M.SERIAL_TO_INDEX.get(s, C.MUMU_INDEX)) for s in devices]
     print(f"{Fore.GREEN}[OK] เจอ {len(devices)} device: {devices} | รอทำ ~{len(pending)} บัญชี "
-          f"(แต่ละเครื่อง claim แยกกัน){Style.RESET_ALL}")
+          f"(multiprocess แยกจอ){Style.RESET_ALL}")
 
-    threads = []
-    for serial in devices:
-        t = threading.Thread(target=worker, args=(serial, input_dir), daemon=True)
-        t.start()
-        threads.append(t)
-        time.sleep(2)
+    stop_event = mp.Event()
+    result_q = mp.Queue()
+    procs = []
+    for serial, index in dev_idx:
+        p = mp.Process(target=device_worker,
+                       args=(serial, index, input_dir, stop_event, result_q))
+        p.start()
+        procs.append(p)
+        time.sleep(2)   # stagger กัน adb/root toggle ชนกันตอนเริ่ม
 
     try:
-        for t in threads:
-            t.join()
+        for p in procs:
+            p.join()
     except KeyboardInterrupt:
-        M.bot_running = False
-        print(f"{Fore.YELLOW}[STOP] หยุด...{Style.RESET_ALL}")
+        print(f"{Fore.YELLOW}[STOP] หยุด (รอบัญชีปัจจุบันของแต่ละจอจบก่อน)...{Style.RESET_ALL}")
+        stop_event.set()
+        for p in procs:
+            p.join(timeout=180)
+        for p in procs:
+            if p.is_alive():
+                p.terminate()
 
-    with STATS_LOCK:
-        done, fail = STATS["done"], STATS["fail"]
+    done = fail = 0
+    while True:
+        try:
+            _s, d, f = result_q.get_nowait()
+            done += d
+            fail += f
+        except Exception:
+            break
     print(f"{Fore.GREEN}[DONE] สำเร็จ {done} | ล้มเหลว {fail} | "
           f"ผลลัพธ์อยู่ใน {LOGIN['output_dir']}/{Style.RESET_ALL}")
 
 
 if __name__ == "__main__":
+    mp.freeze_support()   # ให้ spawn บน Windows ทำงานถูก (กัน re-run main ใน child)
     main()
