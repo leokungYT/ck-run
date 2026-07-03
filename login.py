@@ -73,7 +73,7 @@ DEFAULTS = {
     "failed_dir": "input-id/_failed",
     "claim_dir": "input-id/_processing",
     "start_wait": 15,
-    "shard_size": 500,   # แบ่ง output เป็นโฟลเดอร์ย่อย part-XXXX ละกี่ไฟล์ (0 = ไม่แบ่ง)
+    "shard_size": 0,   # แบ่ง output เป็นโฟลเดอร์ย่อย part-XXXX ละกี่ไฟล์ (0 = ไม่แบ่ง กองรวมใน backup-id เลย)
 }
 LOGIN = dict(DEFAULTS)
 
@@ -251,40 +251,38 @@ def reserve_out_path(out_dir, base):
 def export_login_zip(device, out_name, out_dir):
     """ดึง shared_prefs + files ทั้งหมด แล้ว zip เก็บใน out_dir/out_name.zip"""
     serial = device.serial
-    safe = serial.replace(".", "_").replace(":", "_")
-    tmp_dir = os.path.join(out_dir, f"_tmp_{safe}")
     os.makedirs(out_dir, exist_ok=True)
-    shutil.rmtree(tmp_dir, ignore_errors=True)
-    os.makedirs(tmp_dir, exist_ok=True)
+    # staging ไว้ใน temp ของระบบ (ไม่ใช่ใน out_dir) → ไม่มีขยะ _tmp ค้างปนไฟล์ผลลัพธ์
+    tmp_dir = tempfile.mkdtemp(prefix="cklogin_")
+    try:
+        pulled = []
+        for f in C.SHARED_PREFS_FILES:
+            local = os.path.join(tmp_dir, f)
+            if M.pull_file(serial, f"{C.SHARED_PREFS_DIR}/{f}", local):
+                pulled.append((local, f))
+                M.log(serial, f"  pulled prefs: {f}", Fore.GREEN)
+            else:
+                M.log(serial, f"  ⚠️ pull ล้มเหลว: {f}", Fore.YELLOW)
+        for f in C.FILES_FILES:
+            local = os.path.join(tmp_dir, f)
+            if M.pull_file(serial, f"{C.FILES_DIR}/{f}", local):
+                pulled.append((local, f))
+                M.log(serial, f"  pulled files: {f}", Fore.GREEN)
+            else:
+                M.log(serial, f"  ⚠️ pull ล้มเหลว: {f}", Fore.YELLOW)
 
-    pulled = []
-    for f in C.SHARED_PREFS_FILES:
-        local = os.path.join(tmp_dir, f)
-        if M.pull_file(serial, f"{C.SHARED_PREFS_DIR}/{f}", local):
-            pulled.append((local, f))
-            M.log(serial, f"  pulled prefs: {f}", Fore.GREEN)
-        else:
-            M.log(serial, f"  ⚠️ pull ล้มเหลว: {f}", Fore.YELLOW)
-    for f in C.FILES_FILES:
-        local = os.path.join(tmp_dir, f)
-        if M.pull_file(serial, f"{C.FILES_DIR}/{f}", local):
-            pulled.append((local, f))
-            M.log(serial, f"  pulled files: {f}", Fore.GREEN)
-        else:
-            M.log(serial, f"  ⚠️ pull ล้มเหลว: {f}", Fore.YELLOW)
+        if not pulled:
+            M.log(serial, "ไม่มีไฟล์ให้ zip → export ล้มเหลว", Fore.RED)
+            return None
 
-    if not pulled:
-        M.log(serial, "ไม่มีไฟล์ให้ zip → export ล้มเหลว", Fore.RED)
-        shutil.rmtree(tmp_dir, ignore_errors=True)
-        return None
-
-    zip_path = reserve_out_path(out_dir, out_name)
-    with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
-        for local, arc in pulled:
-            zf.write(local, arc)
-    shutil.rmtree(tmp_dir, ignore_errors=True)
-    M.log(serial, f"✅ export → {os.path.join(os.path.basename(out_dir), os.path.basename(zip_path))}", Fore.GREEN)
-    return zip_path
+        zip_path = reserve_out_path(out_dir, out_name)
+        with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
+            for local, arc in pulled:
+                zf.write(local, arc)
+        M.log(serial, f"✅ export → {os.path.join(os.path.basename(out_dir), os.path.basename(zip_path))}", Fore.GREEN)
+        return zip_path
+    finally:
+        shutil.rmtree(tmp_dir, ignore_errors=True)   # ลบ staging เสมอ แม้จะ error กลางทาง
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -973,6 +971,26 @@ def device_worker(serial, index, input_dir, stop_event, result_q):
     result_q.put((serial, done, fail))
 
 
+def _sweep_stale_tmp():
+    """กวาดโฟลเดอร์ staging ที่ค้างจากรอบก่อน (เวอร์ชันเก่าเคยสร้าง _tmp_* ไว้ในโฟลเดอร์ผลลัพธ์)
+    ไล่ลบ _tmp_* / cklogin_* ทั้งใน out_dir และ part-XXXX ย่อย → โฟลเดอร์ผลลัพธ์สะอาด"""
+    out_dirs = [LOGIN["output_dir"], LOGIN["backup_id_dir"],
+                LOGIN["random_fail_dir"], LOGIN["login_failed_dir"]]
+    removed = 0
+    for base in out_dirs:
+        if not os.path.isdir(base):
+            continue
+        for d in glob.glob(os.path.join(base, "_tmp_*")) + \
+                 glob.glob(os.path.join(base, "cklogin_*")) + \
+                 glob.glob(os.path.join(base, "part-*", "_tmp_*")) + \
+                 glob.glob(os.path.join(base, "part-*", "cklogin_*")):
+            if os.path.isdir(d):
+                shutil.rmtree(d, ignore_errors=True)
+                removed += 1
+    if removed:
+        print(f"{Fore.CYAN}[CLEAN] ลบโฟลเดอร์ staging ค้าง {removed} อัน{Style.RESET_ALL}")
+
+
 def main():
     load_login_config()
     M.set_process_priority()
@@ -981,6 +999,7 @@ def main():
         print(f"{Fore.RED}[ERROR] ไม่เจอ adb.exe{Style.RESET_ALL}")
         return
 
+    _sweep_stale_tmp()   # เก็บกวาดขยะ _tmp ที่ค้างจากรอบก่อนก่อนเริ่ม
     input_dir = LOGIN["input_dir"]
     os.makedirs(input_dir, exist_ok=True)
     os.makedirs(LOGIN["claim_dir"], exist_ok=True)
