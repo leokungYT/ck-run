@@ -461,12 +461,34 @@ def _mg_click(device, name, timeout=C.PLAY_STEP_TIMEOUT, post_delay=1.2):
                             post_delay=post_delay, folder=MAXGACHA_DIR)
 
 
+def _mg_click_when_held(device, name, hold=5, timeout=30, post_delay=1.2):
+    """รอจน name ปรากฏ 'ค้างต่อเนื่อง' ครบ hold วิ แล้วค่อยกด (กันกดตอนหน้ายังโหลด/ยังไม่นิ่ง)
+    ถ้าหายไประหว่างนับ → รีเซ็ตตัวนับ | ไม่เจอเลยจนครบ timeout → ข้าม (คืน False)"""
+    path = M.img_path(name, MAXGACHA_DIR)
+    start = time.time()
+    seen_since = None
+    while M.bot_running and time.time() - start < timeout:
+        pts = M.ImgSearchADB(M.fast_screencap(device), path)
+        if pts:
+            if seen_since is None:
+                seen_since = time.time()
+            elif time.time() - seen_since >= hold:
+                M.tap(device, *pts[0])
+                M.log(device.serial, f"{name} ค้างครบ {hold}s → กดต่อ", Fore.CYAN)
+                time.sleep(post_delay)
+                return True
+        else:
+            seen_since = None   # หายไป → เริ่มนับใหม่
+        time.sleep(0.4)
+    return False
+
+
 def _mg_disk_full(device):
-    """แวะหา disk-full1 (5วิ) ไม่เจอข้าม; เจอ → disk-full2 → disk-full3 → fixdisk1 → fixdisk2"""
+    """แวะหา disk-full1 (5วิ) ไม่เจอข้าม; เจอ → disk-full2 → disk-full3 → fixdisk1 (ค้างครบ 10วิ ค่อยกด) → fixdisk2"""
     if _mg_click(device, "disk-full1.bmp", timeout=5):
         _mg_click(device, "disk-full2.bmp", timeout=10)
         _mg_click(device, "disk-full3.bmp", timeout=10)
-        _mg_click(device, "fixdisk1.bmp", timeout=10)
+        _mg_click_when_held(device, "fixdisk1.bmp", hold=10, timeout=40)
         _mg_click(device, "fixdisk2.bmp", timeout=10)
 
 
