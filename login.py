@@ -676,19 +676,21 @@ def decide_login_export(base, found, maxpet_on):
     return base, LOGIN["output_dir"]
 
 
-# ตัวคั่นในป้ายนับใช้ '／' (fullwidth solidus U+FF0F) — '/' ปกติใช้ในชื่อไฟล์ Windows ไม่ได้ (ตัวคั่น path)
-_CNT_SEP = "／"
-_COUNT_PREFIX_RE = re.compile(r"^\(\d+[/／]\d+\)\+")   # จับทั้งแบบเก่า '/' และใหม่ '／' เวลาตัด prefix ซ้ำ
+# ตัวคั่นในป้ายนับใช้ '-' (เช่น (2-2)) — '/' ปกติใช้ในชื่อไฟล์ Windows ไม่ได้ (ตัวคั่น path)
+_CNT_SEP = "-"
+_COUNT_PREFIX_RE = re.compile(r"^\(\d+[-/／]\d+\)\+")   # จับทั้ง '-' ใหม่ และ '/'、'／' เก่า เวลาตัด prefix ซ้ำ
 
 
 def _count_prefix(name):
-    """เติมป้ายนับหน้าชื่อไฟล์ ตามว่ามี item หลัก (อยู่ใน ITEM_GET_MAP) ในชื่อไหม
-      มี item หลัก (เช่น headking+trader ตำแหน่งไหนก็ได้) → (2／2)+headking+trader  = ครบ
-      มีแต่เพ็ท/trader ไม่มี item หลัก (trader เดี่ยว)      → (0／1)+trader
-    (ตัด prefix (x／y) เดิมออกก่อน กันซ้ำเวลา re-process)"""
+    """เติมป้ายนับหน้าชื่อไฟล์ ตามว่ามี "item หลัก" ในชื่อไหม
+    item หลัก = อยู่ใน ITEM_GET_MAP และไม่อยู่ใน RECORD_ALONE (strong เช่น headking)
+      ของอ่อน (backpack/sturdy-glove/banana... ที่อยู่ใน RECORD_ALONE) ไม่นับเป็นหลัก
+      มี item หลัก (เช่น headking+trader ตำแหน่งไหนก็ได้)        → (2-2)+headking+trader   = ครบ
+      มีแต่เพ็ท/trader หรือมีแต่ของอ่อน ไม่มี item หลัก           → (0-1)+backpack+trader
+    (ตัด prefix (x-y) เดิมออกก่อน กันซ้ำเวลา re-process)"""
     name = _COUNT_PREFIX_RE.sub("", name)
     pieces, _ = _split_orig_name(name)
-    main_items = set(C.ITEM_GET_MAP.values())
+    main_items = set(C.ITEM_GET_MAP.values()) - set(C.RECORD_ALONE)   # item หลักจริง (strong)
     has_main = any(p in main_items for p in pieces)
     num = f"2{_CNT_SEP}2" if has_main else f"0{_CNT_SEP}1"
     return f"({num})+{name}"
