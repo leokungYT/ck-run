@@ -9,8 +9,9 @@ login.py — Cookie Run "login-refresh" แบบ batch
   3) event   : run_event_loops (event-back / git-item / ok-gifitem)  ← login เสร็จ
   4) box     : run_boxes (รับของ box1-5)                              [ถ้า box=1]
   5) maxpet  : run_maxpet (กด pet1 → swipe 5 รอบ → สุ่มเพ็ทจนเจอ trader) [ถ้า maxpet=1]
-  6) export  : เปิด root → ดึงไฟล์บัญชี (เหมือนตอน backup เจอ id) → zip เก็บใน login-success/ → ปิด root
-  7) ย้าย zip ต้นทางไป input-id/_done/ แล้วไปหยิบไฟล์ถัดไปจาก input-id/
+  6) export  : เปิด root → ดึงไฟล์บัญชี (เหมือนตอน backup เจอ id) → zip เก็บตามผล
+               (เจอ item→backup-id | ไม่เจอ→random-Fail | ปิด maxgacha/maxpet→login-success) → ปิด root
+  7) ลบ zip ต้นทางทิ้ง แล้วไปหยิบไฟล์ถัดไปจาก input-id/ (ไม่เก็บ _done — export แยกไปแล้ว)
 
 engine (คลิกรูป / ADB / root toggle / event / boxes / get-pet / pull) ใช้ซ้ำจาก main.py
 ตัว restore (push ไฟล์กลับ) พอร์ตมาจาก push-file-ck/push-file.py
@@ -69,11 +70,9 @@ DEFAULTS = {
     "backup_id_dir": "backup-id",
     "random_fail_dir": "random-Fail",
     "login_failed_dir": "login-failed",
-    "done_dir": "input-id/_done",
     "failed_dir": "input-id/_failed",
     "claim_dir": "input-id/_processing",
     "start_wait": 15,
-    "move_done": 1,
     "shard_size": 500,   # แบ่ง output เป็นโฟลเดอร์ย่อย part-XXXX ละกี่ไฟล์ (0 = ไม่แบ่ง)
 }
 LOGIN = dict(DEFAULTS)
@@ -94,8 +93,7 @@ def load_login_config():
                     cfg["steps"][key] = 1 if v else 0
             for k in ("event_rounds", "config_name", "input_dir", "output_dir",
                       "backup_id_dir", "random_fail_dir", "login_failed_dir",
-                      "done_dir", "failed_dir", "claim_dir", "start_wait",
-                      "move_done", "shard_size"):
+                      "failed_dir", "claim_dir", "start_wait", "shard_size"):
                 if k in loaded:
                     cfg[k] = loaded[k]
             print(f"{Fore.GREEN}[CONFIG] โหลด {os.path.basename(LOGIN_CONFIG_FILE)} แล้ว{Style.RESET_ALL}")
@@ -108,7 +106,6 @@ def load_login_config():
     cfg["start_wait"] = int(cfg["start_wait"])
     cfg["shard_size"] = int(cfg["shard_size"])
     cfg["config_name"] = str(cfg["config_name"]).strip() or C.CUSTOM_CONFIG_NAME
-    cfg["move_done"] = 1 if cfg["move_done"] else 0
     LOGIN = cfg
 
     # push ค่าเข้า config เพื่อให้ engine เดิม (run_event_loops) ใช้ทันที
@@ -118,8 +115,7 @@ def load_login_config():
     enabled = [k for k, v in cfg["steps"].items() if v]
     print(f"{Fore.CYAN}[CONFIG] step ที่เปิด: {enabled} | event_rounds={cfg['event_rounds']} "
           f"| config_name='{cfg['config_name']}'{Style.RESET_ALL}")
-    print(f"{Fore.CYAN}[CONFIG] input={cfg['input_dir']} → output={cfg['output_dir']} "
-          f"| done={cfg['done_dir']} (move_done={cfg['move_done']}){Style.RESET_ALL}")
+    print(f"{Fore.CYAN}[CONFIG] input={cfg['input_dir']} → output={cfg['output_dir']}{Style.RESET_ALL}")
     return LOGIN
 
 
@@ -490,6 +486,15 @@ def _mg_scan_items(device, found, img=None):
             M.log(device.serial, f"⭐ maxgacha เจอ: {name} ({fname})", Fore.GREEN)
 
 
+def _mg_scan_items_window(device, found, secs=2.0, interval=0.35):
+    """เว้นช่วง secs วิ แล้วสแกน ITEM_GET_MAP ต่อเนื่องหลายเฟรม (กัน popup ขึ้นแวบเดียวแล้วหาพลาด)
+    → จับให้ชัวร์ที่สุดในการจดชื่อของที่สุ่มได้"""
+    end = time.time() + secs
+    while M.bot_running and time.time() < end:
+        _mg_scan_items(device, found)
+        time.sleep(interval)
+
+
 def _mg_spam_until_gone(device, name, absent=5, found=None):
     """กด name รัวๆ จนไม่เจอติดต่อกัน absent วิ (สแกน ITEM ระหว่างวนถ้าส่ง found)"""
     path = M.img_path(name, MAXGACHA_DIR)
@@ -532,10 +537,12 @@ def _mg_draw_again(device):
     M.log(serial, "จบ draw-agin loop", Fore.CYAN)
 
 
-def _mg_step2(device, absent=8):
+def _mg_step2(device, found=None, absent=8):
     """get-random25 → disk-full → ok-getstep2 (รัวจนเจอ stop-step2) → cancel-step2 (+v1/v2/v3)
-    ออกจากลูปเมื่อ: เจอ stop-step2 | ไม่เจอ ok-getstep2/stop-step2 ครบ absent วิ | ชน LOOP_MAX_SECS"""
+    ออกจากลูปเมื่อ: เจอ stop-step2 | ไม่เจอ ok-getstep2/stop-step2 ครบ absent วิ | ชน LOOP_MAX_SECS
+    ระหว่างวนสแกน ITEM_GET_MAP ทุกเฟรม + เว้นจังหวะ 2 วิ หลังกดรับของ (กันหาพลาด/ไม่จด)"""
     serial = device.serial
+    stop_path = M.img_path("stop-step2.bmp", MAXGACHA_DIR)
     M.log(serial, "=== STEP2 ===", Fore.GREEN)
     if not _mg_click(device, "get-random25.bmp", timeout=15):
         M.log(serial, "ไม่เจอ get-random25 → กด fix-random25 แล้วหา get-random25 ใหม่", Fore.YELLOW)
@@ -548,7 +555,9 @@ def _mg_step2(device, absent=8):
     clicks = 0
     while M.bot_running and time.time() - start < C.LOOP_MAX_SECS:
         img = M.fast_screencap(device)
-        if M.ImgSearchADB(img, M.img_path("stop-step2.bmp", MAXGACHA_DIR)):
+        if found is not None:
+            _mg_scan_items(device, found, img)   # สแกน ITEM ทุกเฟรม
+        if M.ImgSearchADB(img, stop_path):
             M.log(serial, f"เจอ stop-step2 (กด ok-getstep2 ไป {clicks} ครั้ง) → cancel-step2", Fore.GREEN)
             break
         pts = M.ImgSearchADB(img, M.img_path("ok-getstep2.bmp", MAXGACHA_DIR))
@@ -556,6 +565,15 @@ def _mg_step2(device, absent=8):
             M.tap(device, *pts[0])
             clicks += 1
             last_action = time.time()
+            # เว้นจังหวะ 2 วิ หา ITEM_GET_MAP หลังกดรับของ (เจอ stop-step2 ระหว่างนั้น → ออกเลย)
+            if found is not None:
+                wend = time.time() + 2.0
+                while M.bot_running and time.time() < wend:
+                    wimg = M.fast_screencap(device)
+                    _mg_scan_items(device, found, wimg)
+                    if M.ImgSearchADB(wimg, stop_path):
+                        break
+                    time.sleep(0.35)
         elif time.time() - last_action > absent:
             M.log(serial, f"ไม่เจอ ok-getstep2/stop-step2 ครบ {absent}s (กดไป {clicks} ครั้ง) → จบ step2", Fore.YELLOW)
             break
@@ -589,10 +607,12 @@ def run_maxgacha(device, found):
     if _mg_click(device, "maxgacha3.bmp", timeout=15):
         # เจอ maxgacha3 → วน (maxgacha-step1 + สแกน ITEM) จนไม่เจอ maxgacha3 15วิ
         while M.bot_running:
+            _mg_scan_items_window(device, found, secs=2.0)   # เว้น 2 วิ หา ITEM ให้ชัวร์ก่อนกด
             _mg_click(device, "maxgacha-step1.bmp", timeout=10)   # ⚠️ ยังไม่มีรูปนี้
             _mg_scan_items(device, found)
             if not _mg_click(device, "maxgacha3.bmp", timeout=15):
                 break
+        _mg_scan_items_window(device, found, secs=2.0)   # กวาดปิดท้ายอีกรอบกันของค้างบนจอ
         M.log(serial, "จบลูป maxgacha3 → ไปต่อ", Fore.CYAN)
     else:
         # ไม่เจอ maxgacha3 → maxgacha4 → #step-ruby (maxgacha5 loop)
@@ -600,14 +620,14 @@ def run_maxgacha(device, found):
         _mg_click(device, "maxgacha4.bmp", timeout=15)
         # กด maxgacha4 แล้วเจอ stop-step2 → cancel → ข้ามไป get-random25 (step2) เลย
         if _mg_stop_step2_jump(device):
-            _mg_step2(device)
+            _mg_step2(device, found)
             return
         _mg_disk_full(device)
         _mg_spam_until_gone(device, "maxgacha5.bmp", absent=5, found=found)
 
     # common tail
     _mg_draw_again(device)
-    _mg_step2(device)
+    _mg_step2(device, found)
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -656,6 +676,21 @@ def decide_login_export(base, found, maxpet_on):
     if maxpet_on:
         return base, LOGIN["random_fail_dir"]
     return base, LOGIN["output_dir"]
+
+
+_COUNT_PREFIX_RE = re.compile(r"^\(\d+/\d+\)\+")
+
+
+def _count_prefix(name):
+    """เติมป้ายนับหน้าชื่อไฟล์ ตามว่ามี item หลัก (อยู่ใน ITEM_GET_MAP) ในชื่อไหม
+      มี item หลัก (เช่น headking+trader ตำแหน่งไหนก็ได้) → (2/2)+headking+trader  = ครบ
+      มีแต่เพ็ท/trader ไม่มี item หลัก (trader เดี่ยว)      → (0/1)+trader
+    (ตัด prefix (x/y) เดิมออกก่อน กันซ้ำเวลา re-process)"""
+    name = _COUNT_PREFIX_RE.sub("", name)
+    pieces, _ = _split_orig_name(name)
+    main_items = set(C.ITEM_GET_MAP.values())
+    has_main = any(p in main_items for p in pieces)
+    return f"(2/2)+{name}" if has_main else f"(0/1)+{name}"
 
 
 def _shard_dir(base_dir):
@@ -769,6 +804,8 @@ def process_account(device, serial, zpath):
             out_name, out_dir = decide_login_export(base, found, True)
         else:
             out_name, out_dir = base, LOGIN["output_dir"]
+        if out_dir == LOGIN["backup_id_dir"]:
+            out_name = _count_prefix(out_name)   # เติม (0/N) เฉพาะไฟล์ที่เข้า backup-id
         out_dir = _shard_dir(out_dir)   # แบ่งเป็น part-XXXX กันไฟล์กระจุกจน Explorer ค้าง
         M.log(serial, f"→ เก็บ {out_name}.zip ใน {out_dir}/", Fore.GREEN)
 
@@ -888,13 +925,10 @@ def _worker_loop(serial, input_dir):
         # ย้ายไฟล์ที่ claim ไว้ ออกจาก _processing ตามผลลัพธ์ (ต้องย้ายออกเสมอ กันวนซ้ำ)
         if ok:
             done += 1
-            if LOGIN["move_done"]:
-                move_zip(zpath, LOGIN["done_dir"])     # เก็บไฟล์บัญชีเดิมไว้ที่ _done
-            else:
-                try:
-                    os.remove(zpath)                    # ไม่เก็บ (login-success มีตัวอัปเดตแล้ว)
-                except OSError:
-                    pass
+            try:
+                os.remove(zpath)   # ไม่เก็บ _done — บัญชีถูก export แยกไป backup-id/random-fail/login-success แล้ว
+            except OSError:
+                pass
         else:
             fail += 1
             move_zip(zpath, LOGIN["failed_dir"])       # เก็บไว้ตรวจสอบ

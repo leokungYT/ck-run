@@ -26,7 +26,7 @@ STEP_LABELS = {
     "export":   "Export",
 }
 # ค่า default ที่ GUI จัดการ (นอกจาก steps) — path ต่างๆ ไม่แตะ เก็บไว้ในไฟล์ตามเดิม
-GUI_DEFAULTS = {"event_rounds": 2, "start_wait": 15, "move_done": 1}
+GUI_DEFAULTS = {"event_rounds": 2, "start_wait": 15}
 
 
 def load_config():
@@ -41,15 +41,14 @@ def load_config():
                     cfg["steps"][key] = 1 if v else 0
             cfg["event_rounds"] = int(d.get("event_rounds", cfg["event_rounds"]))
             cfg["start_wait"] = int(d.get("start_wait", cfg["start_wait"]))
-            cfg["move_done"] = 1 if d.get("move_done", cfg["move_done"]) else 0
     except Exception:
         pass
     return cfg
 
 
 def save_config(managed):
-    """merge ทับเฉพาะ field ที่ GUI จัดการ (steps/event_rounds/start_wait/move_done)
-    เก็บ key อื่นในไฟล์เดิมไว้ (input_dir / output_dir / done_dir / failed_dir / claim_dir / config_name)"""
+    """merge ทับเฉพาะ field ที่ GUI จัดการ (steps/event_rounds/start_wait)
+    เก็บ key อื่นในไฟล์เดิมไว้ (input_dir / output_dir / failed_dir / claim_dir / config_name)"""
     data = {}
     if os.path.exists(CONFIG_FILE):
         try:
@@ -103,12 +102,6 @@ class ConfigWindow(ctk.CTkToplevel):
         self.wait_entry.insert(0, str(cfg["start_wait"]))
         self.wait_entry.pack(anchor="w", padx=20, pady=(2, 8))
 
-        # ── move done ──
-        self.move_var = ctk.BooleanVar(value=bool(cfg["move_done"]))
-        ctk.CTkSwitch(self, text="เสร็จแล้วย้ายไฟล์ไป _done (ปิด = ลบทิ้ง)",
-                      variable=self.move_var, font=("Segoe UI", 12),
-                      switch_width=40, switch_height=20).pack(anchor="w", padx=20, pady=4)
-
         ctk.CTkButton(self, text="💾  บันทึก", font=("Segoe UI", 13, "bold"),
                       height=36, corner_radius=8, command=self._save).pack(pady=(14, 10))
 
@@ -126,7 +119,6 @@ class ConfigWindow(ctk.CTkToplevel):
             "steps": steps,
             "event_rounds": rounds,
             "start_wait": wait,
-            "move_done": 1 if self.move_var.get() else 0,
         })
         self.destroy()
 

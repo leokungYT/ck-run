@@ -15,10 +15,8 @@
   "backup_id_dir": "backup-id",
   "random_fail_dir": "random-Fail",
   "login_failed_dir": "login-failed",
-  "done_dir": "input-id/_done",
   "failed_dir": "input-id/_failed",
   "claim_dir": "input-id/_processing",
   "start_wait": 15,
-  "move_done": 1,
   "shard_size": 500
 }
