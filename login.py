@@ -61,7 +61,7 @@ NO_WINDOW = {'creationflags': subprocess.CREATE_NO_WINDOW} if os.name == 'nt' el
 LOGIN_CONFIG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config-main.json")
 
 DEFAULTS = {
-    "steps": {"clean": 1, "restore": 1, "event": 1, "find": 0, "box": 1,
+    "steps": {"clean": 1, "restore": 1, "event": 1, "find": 0, "find_treasure": 0, "box": 1,
               "maxgacha": 1, "maxpet": 1, "export": 1},
     "event_rounds": C.EVENT_LOOP_ROUNDS,
     "config_name": C.CUSTOM_CONFIG_NAME,
@@ -76,6 +76,10 @@ DEFAULTS = {
     "claim_dir": "input-id/_processing",
     "start_wait": 15,
     "shard_size": 0,   # แบ่ง output เป็นโฟลเดอร์ย่อย part-XXXX ละกี่ไฟล์ (0 = ไม่แบ่ง กองรวมใน backup-id เลย)
+    "extra_check_pet": 0,     # find-pet: บังคับต้องเจอชื่อ extra_pet ไม่งั้นปัด → not-found (0 = ปิด)
+    "extra_pet": "",          # ชื่อบังคับของ find-pet (ควรอยู่ใน config-findpet.json เช่น trader)
+    "extra_check_sombut": 0,  # find-treasure: บังคับต้องเจอชื่อ extra_sombut ไม่งั้นปัด → not-found (0 = ปิด)
+    "extra_sombut": "",       # ชื่อ output บังคับของ find-treasure (ควรเป็น name ใน config-treasure.json)
 }
 LOGIN = dict(DEFAULTS)
 
@@ -95,7 +99,8 @@ def load_login_config():
                     cfg["steps"][key] = 1 if v else 0
             for k in ("event_rounds", "config_name", "input_dir", "output_dir",
                       "backup_id_dir", "random_fail_dir", "login_failed_dir",
-                      "found_dir", "not_found_dir", "failed_dir", "claim_dir", "start_wait", "shard_size"):
+                      "found_dir", "not_found_dir", "failed_dir", "claim_dir", "start_wait", "shard_size",
+                      "extra_check_pet", "extra_pet", "extra_check_sombut", "extra_sombut"):
                 if k in loaded:
                     cfg[k] = loaded[k]
             print(f"{Fore.GREEN}[CONFIG] โหลด {os.path.basename(LOGIN_CONFIG_FILE)} แล้ว{Style.RESET_ALL}")
@@ -107,6 +112,10 @@ def load_login_config():
     cfg["event_rounds"] = int(cfg["event_rounds"])
     cfg["start_wait"] = int(cfg["start_wait"])
     cfg["shard_size"] = int(cfg["shard_size"])
+    cfg["extra_check_pet"] = 1 if cfg.get("extra_check_pet") else 0
+    cfg["extra_pet"] = str(cfg.get("extra_pet", "")).strip()
+    cfg["extra_check_sombut"] = 1 if cfg.get("extra_check_sombut") else 0
+    cfg["extra_sombut"] = str(cfg.get("extra_sombut", "")).strip()
     cfg["config_name"] = str(cfg["config_name"]).strip() or C.CUSTOM_CONFIG_NAME
     LOGIN = cfg
 
@@ -380,7 +389,7 @@ def run_maxpet(device, found):
 #   จึงต้องส่ง appear_timeout ตรงๆ ที่นี่)
 # ═══════════════════════════════════════════════════════════════════════
 EVENT_APPEAR_TIMEOUT = 3   # รอรูป event โผล่ครั้งแรกกี่วิ (ไม่โผล่ → ข้าม)
-EVENT_NAMES = ("event-back.bmp", "git-item.bmp", "ok-gifitem.bmp", "fixnews.bmp")
+EVENT_NAMES = ("event-back.bmp", "git-item.bmp", "fix-daliy.png", "ok-gifitem.bmp", "fixnews.bmp")
 
 EVENT_CHECKPOINT = "check-pointevent.bmp"   # รูป checkpoint ก่อนเข้าหน้า event
 EVENT_CHECKPOINT_TIMEOUT = 60               # รอ checkpoint กี่วิ (ไม่เจอ → เริ่ม event เลย)
@@ -423,20 +432,20 @@ def run_event_loops(device):
 
 
 # ═══════════════════════════════════════════════════════════════════════
-#  STEP: find — ค้นหาชื่อตาม config-fin.json (หลัง event, ถ้า step find=1)
+#  STEP: find — ค้นหาชื่อตาม config-findpet.json (หลัง event, ถ้า step find=1)
 #  fin1 (เข้าครั้งเดียว) → วนแต่ละชื่อ:
 #     fin2 → fin3 → พิมพ์ชื่อ+Enter → confirm → OCR ที่ FIN_REGION เทียบว่าตรงชื่อที่ค้นไหม
 #     เจอตรง → จดชื่อลง found (เอาไปตั้งชื่อไฟล์ตอน export: ชื่อที่เจอ + ชื่อเดิม)
 #  วนจนครบรายชื่อ → กด exit ปิดหน้า
-#  ⚠️ ต้องมีรูปใน img/find/: fin1 fin2 fin3 confirm exit (.png) + config-fin.json
+#  ⚠️ ต้องมีรูปใน img/find/: fin1 fin2 fin3 confirm exit (.png) + config-findpet.json
 # ═══════════════════════════════════════════════════════════════════════
 FIN_DIR = "img/find"
 FIN_REGION = (18, 130, 231, 33)   # (x, y, w, h) ตำแหน่งชื่อผลลัพธ์บนจอ สำหรับ OCR
-FIN_CONFIG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config-fin.json")
+FIN_CONFIG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config-findpet.json")
 
 
 def load_fin_names():
-    """อ่านรายชื่อจาก config-fin.json (key 'fin') → list เรียงตามไฟล์ (บรรทัดแรก = ตัวแรก)"""
+    """อ่านรายชื่อจาก config-findpet.json (key 'fin') → list เรียงตามไฟล์ (บรรทัดแรก = ตัวแรก)"""
     try:
         with open(FIN_CONFIG_FILE, "r", encoding="utf-8") as f:
             data = json.load(f)
@@ -444,7 +453,7 @@ def load_fin_names():
     except FileNotFoundError:
         print(f"{Fore.YELLOW}[FIND] ไม่เจอ {os.path.basename(FIN_CONFIG_FILE)} → ข้าม find{Style.RESET_ALL}")
     except Exception as e:
-        print(f"{Fore.YELLOW}[FIND] อ่าน config-fin.json ไม่ได้: {e}{Style.RESET_ALL}")
+        print(f"{Fore.YELLOW}[FIND] อ่าน config-findpet.json ไม่ได้: {e}{Style.RESET_ALL}")
     return []
 
 
@@ -508,13 +517,15 @@ def _fin_scan_match(device, name):
 
 
 def run_find(device, found):
-    """ค้นหาชื่อตาม config-fin.json → จดชื่อที่เจอลง found"""
+    """ค้นหาชื่อตาม config-findpet.json → จดชื่อที่เจอลง found"""
     serial = device.serial
     names = load_fin_names()
     if not names:
-        M.log(serial, "ไม่มีชื่อใน config-fin.json → ข้าม find", Fore.YELLOW)
+        M.log(serial, "ไม่มีชื่อใน config-findpet.json → ข้าม find", Fore.YELLOW)
         return
     M.log(serial, f"=== FIND ({len(names)} ชื่อ) ===", Fore.GREEN)
+    extra_check = bool(LOGIN.get("extra_check_pet"))
+    extra = str(LOGIN.get("extra_pet", "")).strip().lower()
 
     M.wait_and_click(device, "fin1.png", folder=FIN_DIR, required=False, post_delay=1.2)
     for i, name in enumerate(names, 1):
@@ -538,10 +549,180 @@ def run_find(device, found):
             M.log(serial, f"⭐ find เจอ: {name} (OCR='{text}')", Fore.GREEN)
         else:
             M.log(serial, f"find ไม่ตรง: {name} (OCR='{text}')", Fore.YELLOW)
+            # extra-check: ชื่อ extra ที่บังคับต้องเจอ แต่ไม่เจอ → ปัด (หยุดสแกน นับว่าไม่เจอ)
+            if extra_check and extra and name.lower() == extra:
+                M.log(serial, f"extra-check: ไม่เจอ '{name}' → ปัด นับว่าไม่เจอ (ข้ามที่เหลือ)", Fore.YELLOW)
+                break
 
     M.wait_and_click(device, "exit.png", folder=FIN_DIR, required=False, post_delay=1.0)
     hit = [n for n in names if n in found]
     M.log(serial, f"จบ find → เจอ {len(hit)}/{len(names)}: {hit}", Fore.GREEN)
+
+
+# ═══════════════════════════════════════════════════════════════════════
+#  STEP: find-treasure — ค้นหาสมบัติตาม config-treasure.json (หลัง event, ถ้า find_treasure=1)
+#  ต่างจาก find-pet: เช็คด้วย "template match รูป" (ไม่ใช่ OCR)
+#  fin1 → fin2 (เข้าครั้งเดียว) → วนแต่ละ entry เริ่มที่ fin3:
+#     fin3 → fin4 → พิมพ์ชื่อค้นหา+Enter → confirm
+#     → เช็ครูป item (ใน fin-treasure) ว่า match บนจอไหม → เจอ = จดชื่อ output ลง found → exit
+#  config-treasure.json: {"fin":[{"img":"item1.png","search":"laurel Wreath","name":"headking"}, ...]}
+#     img=รูปที่ใช้ match | search=ชื่อที่พิมพ์ค้นหา | name=ชื่อที่เอาไปตั้งชื่อไฟล์ตอน export
+#  ⚠️ รูปใน img/fin-sombut/: fin1 fin2 fin3 fin4 confirm exit (.png) + item ใน img/fin-sombut/fin-treasure/
+# ═══════════════════════════════════════════════════════════════════════
+TREASURE_DIR = "img/fin-sombut"
+TREASURE_ITEM_DIR = "img/fin-sombut/fin-treasure"
+TREASURE_CONFIG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config-treasure.json")
+TREASURE_MATCH_THRESHOLD = 0.90   # match สี (แบบ ranger-gear): หา 'ตำแหน่ง' item — score ขั้นต่ำ (0-1)
+TREASURE_MAX_COLOR_DIFF = 20      # เช็คสีจริงตรงตำแหน่งนั้น: ผลต่างสีเฉลี่ยสูงสุด (0-255) เกินนี้=ตัวเทา/หรี่ → ไม่นับ
+                                  #   (จาก log จริง: มีจริง diff~0 / ตัวเทา diff~36 → 20 อยู่ตรงกลาง)
+
+
+def load_treasure_entries():
+    """อ่าน config-treasure.json (key 'fin') → list ของ dict {img, search, name} เรียงตามไฟล์"""
+    try:
+        with open(TREASURE_CONFIG_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except FileNotFoundError:
+        print(f"{Fore.YELLOW}[TREASURE] ไม่เจอ {os.path.basename(TREASURE_CONFIG_FILE)} → ข้าม{Style.RESET_ALL}")
+        return []
+    except Exception as e:
+        print(f"{Fore.YELLOW}[TREASURE] อ่าน config-treasure.json ไม่ได้: {e}{Style.RESET_ALL}")
+        return []
+    out = []
+    for e in data.get("fin", []):
+        if not isinstance(e, dict):
+            continue
+        img, search, name = (str(e.get(k, "")).strip() for k in ("img", "search", "name"))
+        if img and search and name:
+            out.append({"img": img, "search": search, "name": name})
+    return out
+
+
+def _color_screencap(device):
+    """screencap สี (BGR) — ใช้ raw RGBA ทางเดียวกับ M.fast_screencap (เร็ว/ปกติ) แค่ไม่แปลงเป็น gray
+    fallback เป็น PNG (device.screencap) ถ้า raw ล้มเหลว"""
+    conn = None
+    try:
+        conn = device.client.create_connection(timeout=device.client.timeout)
+        conn.send(f"host:transport:{device.serial}")
+        conn.check_status()
+        conn.send("shell:screencap")
+        conn.check_status()
+        raw = conn.read_all()
+        if len(raw) > 16:
+            w = int.from_bytes(raw[0:4], 'little')
+            h = int.from_bytes(raw[4:8], 'little')
+            expected = w * h * 4
+            if len(raw) >= 12 + expected:
+                arr = M.np.frombuffer(raw, dtype=M.np.uint8, offset=12, count=expected).reshape((h, w, 4))
+                return M.cv2.cvtColor(arr, M.cv2.COLOR_RGBA2BGR)
+    except Exception:
+        pass
+    finally:
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass
+    try:
+        raw = device.screencap()   # fallback PNG
+        if raw:
+            return M.cv2.imdecode(M.np.frombuffer(raw, M.np.uint8), M.cv2.IMREAD_COLOR)
+    except Exception:
+        pass
+    return None
+
+
+def _treasure_match(device, img_name, timeout=3.0):
+    """เช็ค item บนจอสี (แบบ ranger-gear): (1) match สีหา 'ตำแหน่ง' item (2) เทียบ 'สีจริง' ตรงนั้นกับ template
+    → ตัวเทา/หรี่ (ยังไม่มี) รูปทรงเหมือนแต่สีต่าง (diff สูง) → ไม่นับ. รอสูงสุด timeout วิ"""
+    serial = device.serial
+    path = M.img_path(img_name, TREASURE_ITEM_DIR)
+    tpl = M.cv2.imread(path, M.cv2.IMREAD_COLOR)   # template สี (BGR)
+    if tpl is None:
+        M.log(serial, f"treasure: โหลด template ไม่ได้ ({path})", Fore.YELLOW)
+        return False
+    th, tw = tpl.shape[:2]
+    tpl_i = tpl.astype(M.np.int16)
+    end = time.time() + timeout
+    while M.bot_running and time.time() < end:
+        color = _color_screencap(device)
+        if color is not None and color.shape[0] >= th and color.shape[1] >= tw:
+            res = M.cv2.matchTemplate(color, tpl, M.cv2.TM_CCOEFF_NORMED)   # match สี 3 channel
+            _minv, score, _minl, loc = M.cv2.minMaxLoc(res)
+            if score >= TREASURE_MATCH_THRESHOLD:                            # (1) เจอตำแหน่ง item
+                x, y = loc
+                crop = color[y:y + th, x:x + tw].astype(M.np.int16)
+                diff = float(M.np.abs(crop - tpl_i).mean())                 # (2) เทียบสีจริง (ไม่ normalize)
+                if diff <= TREASURE_MAX_COLOR_DIFF:
+                    M.log(serial, f"treasure: เจอ ({img_name} score={score:.3f} สีตรง diff={diff:.1f})", Fore.GREEN)
+                    return True
+                M.log(serial, f"treasure: เจอรูปแต่สีต่าง (score={score:.3f} diff={diff:.1f} > {TREASURE_MAX_COLOR_DIFF}) = ตัวเทา/หรี่ ไม่นับ", Fore.YELLOW)
+        time.sleep(0.4)
+    return False
+
+
+def _treasure_required_names(extra):
+    """แปลง extra_sombut → set ของชื่อ output (lower) ที่บังคับต้องเจอ
+    match ได้ทั้งชื่อ 'search' และ 'name' ของ entry (เผื่อพิมพ์ชื่อ output ตรงๆ ก็ใส่ extra เอง)"""
+    ex = (extra or "").strip().lower()
+    if not ex:
+        return set()
+    req = {e["name"].lower() for e in load_treasure_entries()
+           if e["search"].strip().lower() == ex or e["name"].strip().lower() == ex}
+    req.add(ex)   # เผื่อพิมพ์ชื่อ output ตรงๆ
+    return req
+
+
+def run_treasure(device, found):
+    """ค้นหาสมบัติตาม config-treasure.json → จดชื่อ output (name) ที่เจอลง found"""
+    serial = device.serial
+    entries = load_treasure_entries()
+    if not entries:
+        M.log(serial, "ไม่มี entry ใน config-treasure.json → ข้าม find-treasure", Fore.YELLOW)
+        return
+    M.log(serial, f"=== FIND-TREASURE ({len(entries)} ชิ้น) ===", Fore.GREEN)
+    extra_check = bool(LOGIN.get("extra_check_sombut"))
+    extra = str(LOGIN.get("extra_sombut", "")).strip().lower()
+
+    # เข้าเมนูครั้งเดียว: fin1 → fin2
+    M.wait_and_click(device, "fin1.png", folder=TREASURE_DIR, required=False, post_delay=1.2)
+    M.wait_and_click(device, "fin2.png", folder=TREASURE_DIR, required=False, post_delay=1.0)
+    for i, e in enumerate(entries, 1):
+        if not M.bot_running:
+            break
+        _raise_if_login_failed(device)
+        M.log(serial, f"--- treasure {i}/{len(entries)}: ค้นหา '{e['search']}' (รูป {e['img']}) ---", Fore.CYAN)
+        # แต่ละรอบเริ่มที่ fin3
+        M.wait_and_click(device, "fin3.png", folder=TREASURE_DIR, required=False, post_delay=1.0)
+        M.wait_and_click(device, "fin4.png", folder=TREASURE_DIR, required=False, post_delay=1.0)
+        # กรอกชื่อค้นหา + Enter
+        device.shell(f"input text '{e['search']}'")
+        time.sleep(0.8)
+        device.shell("input keyevent 66")   # KEYCODE_ENTER
+        time.sleep(1.2)
+        # confirm
+        M.wait_and_click(device, "confirm.png", folder=TREASURE_DIR, required=False, post_delay=1.5)
+        # เช็ครูป item ว่า match บนจอไหม
+        matched = _treasure_match(device, e["img"])
+        if matched:
+            found.add(e["name"])
+            M.log(serial, f"⭐ treasure เจอ: {e['name']} (รูป {e['img']} match)", Fore.GREEN)
+        else:
+            M.log(serial, f"treasure ไม่เจอ: {e['search']} (รูป {e['img']} ไม่ match)", Fore.YELLOW)
+        # exit ปิดกลับหน้า list ก่อนค้นตัวถัดไป
+        M.wait_and_click(device, "exit.png", folder=TREASURE_DIR, required=False, post_delay=1.0)
+        # extra-checksombut: entry ที่บังคับต้องเจอ (match ชื่อ search หรือ name) แต่ไม่เจอ → ปัด
+        if extra_check and extra and not matched and \
+           (e["search"].strip().lower() == extra or e["name"].strip().lower() == extra):
+            M.log(serial, f"extra-checksombut: ไม่เจอ '{e['search']}' ({e['name']}) → ปัด นับว่าไม่เจอ (ข้ามที่เหลือ)", Fore.YELLOW)
+            break
+
+    # ออกจากเมนู treasure: out1 → out2 ก่อนจบ
+    M.wait_and_click(device, "out1.png", folder=TREASURE_DIR, required=False, post_delay=1.0)
+    M.wait_and_click(device, "out2.png", folder=TREASURE_DIR, required=False, post_delay=1.0)
+    hit = sorted({e["name"] for e in entries if e["name"] in found})
+    M.log(serial, f"จบ find-treasure → เจอ {len(hit)}: {hit}", Fore.GREEN)
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -931,7 +1112,12 @@ def process_account(device, serial, zpath):
             run_event_loops(device)
         M.log(serial, "login เสร็จ → ทำ config เพิ่ม (box / maxgacha)", Fore.CYAN)
 
-        # 3.5) find — ค้นหาชื่อตาม config-fin.json (ถ้า find=1) จดชื่อที่เจอลง found
+        # 3.5) find-treasure ก่อน — ค้นหาสมบัติตาม config-treasure.json (ถ้า find_treasure=1)
+        #      จดชื่อลง found (ไม่ clear) แล้วให้ find-pet ทำต่อ → รวมชื่อตอน export
+        if step_on("find_treasure"):
+            run_treasure(device, found)
+
+        # 3.6) find-pet — ค้นหาชื่อตาม config-findpet.json (ถ้า find=1) จดชื่อเพิ่มลง found
         if step_on("find"):
             run_find(device, found)
 
@@ -954,14 +1140,32 @@ def process_account(device, serial, zpath):
     #    maxgacha: เจอ item → backup-id (ชื่อ = item + เดิม) | สุ่มไม่ได้อะไรเลย → random-Fail (ชื่อเดิม)
     #    ไม่งั้น → กติกา trader (decide_login_export)
     if step_on("export"):
-        if step_on("find"):
-            # find: เจอ → id-found (ชื่อที่ OCR เจอทั้งหมดเรียงตาม config-fin.json + ชื่อเดิม)
-            #       ไม่เจอเลย → not-found (ชื่อเดิม)
-            fin_found = [n for n in load_fin_names() if n in found]
-            if fin_found:
-                out_name, out_dir = "+".join(fin_found) + "+" + base, LOGIN["found_dir"]
+        if step_on("find") or step_on("find_treasure"):
+            # find-treasure (ก่อน) + find-pet — รีชื่อก่อน export กันชื่อยาวสะสม:
+            #   ทิ้งชื่อ +item+ เดิมทั้งหมด เหลือเฉพาะส่วนใน [ ] แล้ว add เฉพาะชื่อที่สแกนได้รอบนี้
+            #   เจอ → id-found (ชื่อที่สแกนได้ + [ID]) | ไม่เจอ/ติด extra-check → not-found (เหลือแค่ [ID])
+            _, id_suffix = _split_orig_name(base)          # เก็บเฉพาะส่วน [ID] ท้าย (ยกเว้นพวกใน [ ])
+            hit_names, extra_ok = [], True
+            if step_on("find_treasure"):
+                for e in load_treasure_entries():          # treasure ก่อน (ตามลำดับ config)
+                    if e["name"] in found and e["name"] not in hit_names:
+                        hit_names.append(e["name"])
+                ex = str(LOGIN.get("extra_sombut", "")).strip()
+                if LOGIN.get("extra_check_sombut") and ex:
+                    req = _treasure_required_names(ex)   # แปลง search→output name ก่อนเทียบ found
+                    extra_ok = extra_ok and bool({f.lower() for f in found} & req)
+            if step_on("find"):
+                for n in load_fin_names():                 # find-pet ต่อท้าย
+                    if n in found and n not in hit_names:
+                        hit_names.append(n)
+                ex = str(LOGIN.get("extra_pet", "")).strip()
+                if LOGIN.get("extra_check_pet") and ex:
+                    extra_ok = extra_ok and (ex.lower() in {f.lower() for f in found})
+            if hit_names and extra_ok:
+                out_name = ("+".join(hit_names) + "+" + id_suffix) if id_suffix else "+".join(hit_names)
+                out_dir = LOGIN["found_dir"]
             else:
-                out_name, out_dir = base, LOGIN["not_found_dir"]
+                out_name, out_dir = (id_suffix or base), LOGIN["not_found_dir"]   # ไม่เจอ → เหลือแค่ [ID]
         elif step_on("maxgacha"):
             if found:
                 out_name, out_dir = _combine_name(base, found), LOGIN["backup_id_dir"]

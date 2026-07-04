@@ -4,6 +4,7 @@
     "restore": 1,
     "event": 1,
     "find": 1,
+    "find_treasure": 1,
     "box": 0,
     "maxgacha": 0,
     "maxpet": 0,
@@ -21,5 +22,9 @@
   "failed_dir": "input-id/_failed",
   "claim_dir": "input-id/_processing",
   "start_wait": 15,
-  "shard_size": 0
+  "shard_size": 0,
+  "extra_check_pet": 0,
+  "extra_pet": "trader",
+  "extra_check_sombut": 0,
+  "extra_sombut": "laurel Wreath"
 }

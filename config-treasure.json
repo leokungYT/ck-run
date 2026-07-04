@@ -1,0 +1,19 @@
+{
+  "fin": [
+    {
+      "img": "item1.png",
+      "search": "laurel Wreath",
+      "name": "headking"
+    },
+    {
+      "img": "item2.png",
+      "search": "banana",
+      "name": "banana"
+    },
+    {
+      "img": "item3.png",
+      "search": "coin wallet",
+      "name": "backpack"
+    }
+  ]
+}

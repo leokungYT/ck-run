@@ -13,23 +13,27 @@ CONFIG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config-m
 
 # ── default steps (ตรงกับ login.py DEFAULTS) ──
 DEFAULT_STEPS = {
-    "clean": 1, "restore": 1, "event": 1, "find": 0, "box": 1,
+    "clean": 1, "restore": 1, "event": 1, "find": 0, "find_treasure": 0, "box": 1,
     "maxgacha": 1, "maxpet": 1, "export": 1,
 }
 STEP_LABELS = {
-    "clean":    "ลบข้อมูลเดิมก่อน restore",
-    "restore":  "Restore (push ไฟล์จาก input-id)",
-    "event":    "Event Loop (login)",
-    "find":     "Find (ค้นหาชื่อตาม config-fin.json)",
-    "box":      "รับของ Box (box1-5)",
-    "maxgacha": "Max Gacha (สุ่ม item)",
-    "maxpet":   "Max Pet (สุ่มจนเจอ trader)",
-    "export":   "Export",
+    "clean":         "ลบข้อมูลเดิมก่อน restore",
+    "restore":       "Restore (push ไฟล์จาก input-id)",
+    "event":         "Event Loop (login)",
+    "find":          "Find-pet (ค้นหาชื่อตาม config-findpet.json)",
+    "find_treasure": "Find-treasure (สมบัติ ตาม config-treasure.json)",
+    "box":           "รับของ Box (box1-5)",
+    "maxgacha":      "Max Gacha (สุ่ม item)",
+    "maxpet":        "Max Pet (สุ่มจนเจอ trader)",
+    "export":        "Export",
 }
-# เปิด find → ปิด step พวกนี้อัตโนมัติ (find ต้องรันเดี่ยวๆ)
+# เปิด find/find_treasure → ปิด step พวกนี้อัตโนมัติ (ต้องรันเดี่ยวๆ)
+FIND_STEPS = ("find", "find_treasure")
 FIND_EXCLUSIVE = ("box", "maxgacha", "maxpet")
 # ค่า default ที่ GUI จัดการ (นอกจาก steps) — path ต่างๆ ไม่แตะ เก็บไว้ในไฟล์ตามเดิม
-GUI_DEFAULTS = {"event_rounds": 2, "start_wait": 15}
+GUI_DEFAULTS = {"event_rounds": 2, "start_wait": 15,
+                "extra_check_pet": 0, "extra_pet": "",
+                "extra_check_sombut": 0, "extra_sombut": ""}
 
 
 def load_config():
@@ -44,6 +48,10 @@ def load_config():
                     cfg["steps"][key] = 1 if v else 0
             cfg["event_rounds"] = int(d.get("event_rounds", cfg["event_rounds"]))
             cfg["start_wait"] = int(d.get("start_wait", cfg["start_wait"]))
+            cfg["extra_check_pet"] = 1 if d.get("extra_check_pet", cfg["extra_check_pet"]) else 0
+            cfg["extra_pet"] = str(d.get("extra_pet", cfg["extra_pet"]))
+            cfg["extra_check_sombut"] = 1 if d.get("extra_check_sombut", cfg["extra_check_sombut"]) else 0
+            cfg["extra_sombut"] = str(d.get("extra_sombut", cfg["extra_sombut"]))
     except Exception:
         pass
     return cfg
@@ -71,7 +79,7 @@ class ConfigWindow(ctk.CTkToplevel):
     def __init__(self, parent):
         super().__init__(parent)
         self.title("⚙  Setup Config (login)")
-        self.geometry("340x540")
+        self.geometry("340x740")
         self.resizable(False, False)
         self.transient(parent)
         self.grab_set()
@@ -91,7 +99,7 @@ class ConfigWindow(ctk.CTkToplevel):
             sw = ctk.CTkSwitch(frame_steps, text=STEP_LABELS.get(key, key),
                                variable=var, font=("Segoe UI", 12),
                                switch_width=40, switch_height=20,
-                               command=(self._apply_find_lock if key == "find" else None))
+                               command=(self._apply_find_lock if key in FIND_STEPS else None))
             sw.pack(anchor="w", pady=3)
             self.step_switches[key] = sw
         self._apply_find_lock()   # ตั้งสถานะล็อกเริ่มต้นตามค่าที่โหลดมา
@@ -110,13 +118,33 @@ class ConfigWindow(ctk.CTkToplevel):
         self.wait_entry.insert(0, str(cfg["start_wait"]))
         self.wait_entry.pack(anchor="w", padx=20, pady=(2, 8))
 
+        # ── extra-checkpet (find-pet: บังคับต้องเจอชื่อนี้ ไม่งั้น → not-found) ──
+        self.extra_check_pet_var = ctk.BooleanVar(value=bool(cfg["extra_check_pet"]))
+        ctk.CTkSwitch(self, text="Extra-checkpet (find-pet: บังคับเจอชื่อนี้)",
+                      variable=self.extra_check_pet_var, font=("Segoe UI", 12),
+                      switch_width=40, switch_height=20).pack(anchor="w", padx=20, pady=(4, 2))
+        self.extra_pet_entry = ctk.CTkEntry(self, width=180, font=("Segoe UI", 12),
+                                            placeholder_text="ชื่อบังคับ (pet) เช่น trader")
+        self.extra_pet_entry.insert(0, str(cfg["extra_pet"]))
+        self.extra_pet_entry.pack(anchor="w", padx=20, pady=(2, 8))
+
+        # ── extra-checksombut (find-treasure: บังคับต้องเจอชื่อนี้ ไม่งั้น → not-found) ──
+        self.extra_check_sombut_var = ctk.BooleanVar(value=bool(cfg["extra_check_sombut"]))
+        ctk.CTkSwitch(self, text="Extra-checksombut (find-treasure: บังคับเจอชื่อนี้)",
+                      variable=self.extra_check_sombut_var, font=("Segoe UI", 12),
+                      switch_width=40, switch_height=20).pack(anchor="w", padx=20, pady=(4, 2))
+        self.extra_sombut_entry = ctk.CTkEntry(self, width=180, font=("Segoe UI", 12),
+                                               placeholder_text="ชื่อบังคับ (sombut) เช่น headking")
+        self.extra_sombut_entry.insert(0, str(cfg["extra_sombut"]))
+        self.extra_sombut_entry.pack(anchor="w", padx=20, pady=(2, 8))
+
         ctk.CTkButton(self, text="💾  บันทึก", font=("Segoe UI", 13, "bold"),
                       height=36, corner_radius=8, command=self._save).pack(pady=(14, 10))
 
     def _apply_find_lock(self):
-        """เปิด find → ปิด box/maxgacha/maxpet อัตโนมัติ + ล็อกสวิตช์ (find รันเดี่ยว)
-        ปิด find → ปลดล็อกให้ปรับได้ตามเดิม"""
-        find_on = self.step_vars["find"].get()
+        """เปิด find/find_treasure → ปิด box/maxgacha/maxpet อัตโนมัติ + ล็อกสวิตช์ (find รันเดี่ยว)
+        ปิดทั้งคู่ → ปลดล็อกให้ปรับได้ตามเดิม"""
+        find_on = any(self.step_vars[k].get() for k in FIND_STEPS)
         for k in FIND_EXCLUSIVE:
             sw = self.step_switches.get(k)
             if not sw:
@@ -141,6 +169,10 @@ class ConfigWindow(ctk.CTkToplevel):
             "steps": steps,
             "event_rounds": rounds,
             "start_wait": wait,
+            "extra_check_pet": 1 if self.extra_check_pet_var.get() else 0,
+            "extra_pet": self.extra_pet_entry.get().strip(),
+            "extra_check_sombut": 1 if self.extra_check_sombut_var.get() else 0,
+            "extra_sombut": self.extra_sombut_entry.get().strip(),
         })
         self.destroy()
 

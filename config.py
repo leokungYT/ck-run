@@ -151,9 +151,9 @@ RECORD_ALONE = {
 USE_MUMU_ROOT = True
 
 # path ของ MuMuManager.exe (ดูจาก info: nx_main\MuMuManager.exe)
-MUMU_MANAGER = r"C:\Program Files\Netease\MuMuPlayer\nx_main\MuMuManager.exe"
-# index ของ instance — ดูได้จาก:  MuMuManager.exe info -v all
-MUMU_INDEX = "2"
+MUMU_MANAGER = r"D:\Program Files\Netease\MuMuPlayerGlobal-12.0\nx_main\MuMuManager.exe"
+# index ของ instance — ดูได้จาก:  MuMuManager.exe info -v all  (instance ที่รันจริงคือ index 1)
+MUMU_INDEX = "1"
 
 # จัดการไฟล์ด้วย su -c หรือไม่
 #   True  = MuMu (root ผ่าน su, adb shell ไม่ใช่ root)  ← ต้องเป็น True เมื่อ USE_MUMU_ROOT
