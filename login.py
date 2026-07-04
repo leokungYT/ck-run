@@ -880,6 +880,7 @@ def _mg_step2(device, found=None, absent=8):
         _mg_click(device, "fix-random25.bmp", timeout=10)
         if not _mg_click(device, "get-random25.bmp", timeout=15):
             M.log(serial, "⚠️ ยังไม่เจอ get-random25 หลัง fix-random25 (หน้า step2 อาจยังไม่เปิด)", Fore.YELLOW)
+    _mg_click(device, "fixmaxgacha.bmp", timeout=3)   # หลังกด get-random25 → เผื่อมี fixmaxgacha (ไม่เจอใน 3 วิ ข้าม)
     _mg_disk_full(device)
 
     start = last_action = time.time()
