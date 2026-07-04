@@ -1,2 +1,1 @@
-@echo off
-"%~dp0.venv\Scripts\python.exe" "%~dp0login-gui.py"
+py login-gui.py

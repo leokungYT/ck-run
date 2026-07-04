@@ -911,18 +911,23 @@ def ocr_ruby_number(img_gray):
     crop = img_gray[y:y + h, x:x + w]
     if crop.size == 0:
         return None
-    big = cv2.resize(crop, None, fx=4, fy=4, interpolation=cv2.INTER_CUBIC)
+    big = cv2.resize(crop, None, fx=6, fy=6, interpolation=cv2.INTER_CUBIC)
     otsu = cv2.threshold(big, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)[1]
+    inv = cv2.bitwise_not(otsu)   # เผื่อเลขขาวบนพื้นเข้ม
     reader = get_ocr_reader()
-    for candidate in (big, otsu):
+    # เลือกผลที่ confidence สูงสุด จากทุก preprocessing (กันอ่านเพี้ยน 3→8 / ต่อเลขมั่ว)
+    best, best_conf = None, -1.0
+    for cand in (big, otsu, inv):
         try:
-            res = reader.readtext(candidate, allowlist="0123456789", detail=0)
+            res = reader.readtext(cand, allowlist="0123456789", detail=1)
         except Exception:
             res = []
-        digits = "".join(re.findall(r"\d+", "".join(res)))
-        if digits:
-            return digits
-    return None
+        for item in res:
+            txt, conf = item[1], float(item[2])
+            digits = "".join(re.findall(r"\d+", txt))
+            if digits and conf > best_conf:
+                best, best_conf = digits, conf
+    return best
 
 
 def run_check_ruby(device):
