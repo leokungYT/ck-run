@@ -810,16 +810,33 @@ def _mg_disk_full(device, timeout=5):
         _mg_diskfull_lock.release()
 
 
-def _mg_diskfull_watchdog(device, stop_event):
-    """thread เฝ้าดู disk-full 'ตลอดเวลา' ระหว่าง maxgacha — เจอ disk-full1 กลางจอเมื่อไหร่
-    บังคับเคลียร์ disk-full1→disk-full3→fixdisk ก่อน (เหนือทุก step) แล้วให้ flow หลักทำงานต่อ"""
-    path = M.img_path("disk-full1.bmp", MAXGACHA_DIR)
+def _mg_popup_watchdog(device, stop_event):
+    """thread เฝ้า popup 'ตลอดเวลา' ระหว่าง maxgacha (เหนือทุก step) แล้วให้ flow หลักทำงานต่อ:
+      - disk-full1 กลางจอ → บังคับเคลียร์ disk-full1→disk-full3→fixdisk ทันที
+      - fixsumting ค้างต่อเนื่องครบ 3วิ → กด fixsumting1 (รูปอยู่ใน img/)"""
+    serial = device.serial
+    disk_path = M.img_path("disk-full1.bmp", MAXGACHA_DIR)
+    fixs_path = M.img_path("fixsumting.png")   # อยู่ใน img/ (default folder)
+    fixs_seen_since = None
     while M.bot_running and not stop_event.is_set():
-        if M.ImgSearchADB(M.fast_screencap(device), path):
-            M.log(device.serial, "🛑 watchdog เจอ disk-full → บังคับเคลียร์ก่อน", Fore.YELLOW)
+        img = M.fast_screencap(device)
+        # 1) disk-full → บังคับเคลียร์ทันที
+        if M.ImgSearchADB(img, disk_path):
+            M.log(serial, "🛑 watchdog เจอ disk-full → บังคับเคลียร์ก่อน", Fore.YELLOW)
             _mg_disk_full(device, timeout=3)
+            fixs_seen_since = None
+            continue
+        # 2) fixsumting ค้างครบ 3วิ → กด fixsumting1
+        if M.ImgSearchADB(img, fixs_path):
+            if fixs_seen_since is None:
+                fixs_seen_since = time.time()
+            elif time.time() - fixs_seen_since >= 3:
+                M.log(serial, "🛑 watchdog เจอ fixsumting ค้างครบ 3วิ → กด fixsumting1", Fore.YELLOW)
+                M.wait_and_click(device, "fixsumting1.png", timeout=5, required=False, post_delay=1.2)
+                fixs_seen_since = None
         else:
-            time.sleep(0.5)
+            fixs_seen_since = None   # หายไป → เริ่มนับใหม่
+        time.sleep(0.5)
 
 
 def _mg_scan_items(device, found, img=None):
@@ -951,9 +968,9 @@ def run_maxgacha(device, found):
     serial = device.serial
     M.log(serial, "=== MAX-GACHA ===", Fore.GREEN)
 
-    # watchdog เฝ้า disk-full ตลอดช่วง maxgacha (เจอเมื่อไหร่บังคับเคลียร์ก่อน)
+    # watchdog เฝ้า popup (disk-full + fixsumting) ตลอดช่วง maxgacha (เจอเมื่อไหร่จัดการก่อน)
     stop_wd = threading.Event()
-    wd = threading.Thread(target=_mg_diskfull_watchdog, args=(device, stop_wd), daemon=True)
+    wd = threading.Thread(target=_mg_popup_watchdog, args=(device, stop_wd), daemon=True)
     wd.start()
     try:
         _run_maxgacha_body(device, found)
