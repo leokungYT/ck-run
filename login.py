@@ -764,8 +764,17 @@ def run_boxes(device):
 #  ⚠️ ต้องเพิ่มรูป maxgacha-step1.bmp + stop-ruby.bmp (ยังไม่มี — ตอนนี้จะข้าม/พึ่ง safety cap)
 # ═══════════════════════════════════════════════════════════════════════
 MAXGACHA_DIR = "img/max-gacha"
-_mg_diskfull_lock = threading.Lock()   # กันเคลียร์ disk-full ซ้อน (watchdog vs main thread)
-_mg_fixspace_lock = threading.Lock()   # กันกด fix-space ซ้อน
+_mg_diskfull_locks = {}                # per-device lock (serial->Lock): กันเคลียร์ disk-full ซ้อน watchdog vs main thread 'เครื่องเดียวกัน'
+_mg_locks_guard = threading.Lock()     # กัน race ตอนสร้าง lock ใหม่ใน dict
+
+
+def _mg_dev_lock(store, serial):
+    """คืน Lock ประจำ serial — แต่ละเครื่องมี lock ของตัวเอง จะได้เคลียร์ popup พร้อมกันหลายเครื่องได้ (ไม่ต่อคิวข้ามเครื่อง)"""
+    with _mg_locks_guard:
+        lk = store.get(serial)
+        if lk is None:
+            lk = store[serial] = threading.Lock()
+        return lk
 
 
 def _mg_click(device, name, timeout=C.PLAY_STEP_TIMEOUT, post_delay=1.2):
@@ -798,8 +807,9 @@ def _mg_click_when_held(device, name, hold=5, timeout=30, post_delay=1.2):
 
 def _mg_disk_full(device, timeout=5):
     """แวะหา disk-full1 (timeout วิ) ไม่เจอข้าม; เจอ → disk-full2 → disk-full3 → fixdisk1 (ค้างครบ 10วิ ค่อยกด) → fixdisk2
-    ใช้ lock non-blocking: ถ้าอีก thread (watchdog/main) กำลังเคลียร์อยู่ → ข้าม (กันกดซ้อน)"""
-    if not _mg_diskfull_lock.acquire(blocking=False):
+    ใช้ lock (ต่อเครื่อง) non-blocking: ถ้าอีก thread ของเครื่องเดียวกันกำลังเคลียร์อยู่ → ข้าม (กันกดซ้อน)"""
+    lock = _mg_dev_lock(_mg_diskfull_locks, device.serial)
+    if not lock.acquire(blocking=False):
         return
     try:
         if _mg_click(device, "disk-full1.bmp", timeout=timeout):
@@ -808,21 +818,39 @@ def _mg_disk_full(device, timeout=5):
             _mg_click_when_held(device, "fixdisk1.bmp", hold=10, timeout=40)
             _mg_click(device, "fixdisk2.bmp", timeout=10)
     finally:
-        _mg_diskfull_lock.release()
+        lock.release()
+
+
+def _mg_click_until_gone(device, name, absent=1.2, first_wait=2.5, max_secs=15, post_delay=0.6):
+    """กด name (รูปใน img/ default) 'รัวๆ จนปุ่มนั้นหาย' ติดต่อกัน absent วิ → คืน True
+    ไม่เจอเลยใน first_wait วิแรก → คืน False (ข้ามไปปุ่มถัดไป) | ชน max_secs → หยุด"""
+    path = M.img_path(name)
+    start = time.time()
+    last_seen = None
+    while M.bot_running and time.time() - start < max_secs:
+        pts = M.ImgSearchADB(M.fast_screencap(device), path)
+        if pts:
+            M.tap(device, *pts[0])
+            M.log(device.serial, f"กด {name} ที่ {pts[0]}", Fore.CYAN)
+            last_seen = time.time()
+            time.sleep(post_delay)
+            continue
+        if last_seen is None:
+            if time.time() - start >= first_wait:
+                return False              # ยังไม่เคยเจอปุ่มนี้ → ข้าม
+        elif time.time() - last_seen >= absent:
+            return True                   # เคยเจอแล้วหายครบ absent วิ → จบปุ่มนี้
+        time.sleep(0.3)
+    return last_seen is not None
 
 
 def _mg_fix_space(device):
-    """watchdog เจอ fix-space1 (ข้อความ "Not enough space!") แล้ว → เคลียร์ด้วยการกดปุ่มจริง
-    fix-space2(Confirm)→3(Expand)→4(Confirm)→5(Confirm)→6(X)
-    ⚠️ fix-space1 เป็นแค่ 'ข้อความ' ไว้ detect ไม่ใช่ปุ่ม → ไม่ต้องกด เริ่มที่ fix-space2 เลย
-    (รูปอยู่ใน img/ default; lock กันกดซ้อน)"""
-    if not _mg_fixspace_lock.acquire(blocking=False):
-        return
-    try:
-        for i in range(2, 7):
-            M.wait_and_click(device, f"fix-space{i}.png", timeout=10, required=False, post_delay=1.2)
-    finally:
-        _mg_fixspace_lock.release()
+    """watchdog เจอ fix-space1 (ข้อความ "Not enough space!") → เคลียร์ทีละปุ่ม
+    'กดจนปุ่มนั้นหาย' ค่อยไปปุ่มถัดไป: fix-space2(Confirm)→3(Expand)→4(Confirm)→5(Confirm)→6(X)
+    ⚠️ fix-space1 เป็นแค่ 'ข้อความ' ไว้ detect ไม่ใช่ปุ่ม → เริ่มกดจริงที่ fix-space2
+    (เรียกจาก watchdog thread เดียวต่อเครื่อง → ไม่ต้องใช้ lock)"""
+    for i in range(2, 7):
+        _mg_click_until_gone(device, f"fix-space{i}.png")
 
 
 def _mg_popup_watchdog(device, stop_event):
