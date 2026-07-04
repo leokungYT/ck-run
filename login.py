@@ -969,6 +969,16 @@ def run_maxgacha(device, found):
 #    - maxpet เปิดแต่ไม่มี trader → random-Fail (ชื่อเดิม)
 #    - maxpet ปิด (ไม่ได้สุ่ม) และไม่มี trader → login-success (ชื่อเดิม)
 # ═══════════════════════════════════════════════════════════════════════
+_RUBY_BRACKET_RE = re.compile(r"\[\d+\]")   # [300] [800] — bracket เลขล้วน = ruby (member ID มีตัวอักษรเสมอ)
+
+
+def _strip_ruby_brackets(name):
+    """ลบ bracket เลขล้วน [123] (ruby เก่า) ทิ้ง เก็บเฉพาะ [ID] ที่มีตัวอักษร → กัน [ruby] สะสมทุกรอบ
+    เช่น '[300]+[800]+backpack+[JQDNF8071]+[310]' → 'backpack+[JQDNF8071]'"""
+    name = _RUBY_BRACKET_RE.sub("", name)
+    return re.sub(r"\++", "+", name).strip("+")
+
+
 def _split_orig_name(base):
     """แยกชื่อไฟล์เดิม → (list ชื่อของก่อน [ID], ส่วน [ID] ท้าย)
     เช่น 'banana+[BCVZL1719]+' → (['banana'], '[BCVZL1719]+')"""
@@ -1085,6 +1095,7 @@ def handle_login_failed(device, serial, base):
 def process_account(device, serial, zpath):
     name = os.path.basename(zpath)
     base = os.path.splitext(name)[0]
+    base = _strip_ruby_brackets(base)   # ล้าง [ruby] เก่าทิ้งก่อน (กันสะสม) — เหลือแค่ชื่อ + [ID]
     M.log(serial, f"┌─ เริ่มบัญชี: {name}", Fore.MAGENTA)
 
     # 1) restore (เปิด root ตลอดช่วง push แล้วค่อยปิด)
