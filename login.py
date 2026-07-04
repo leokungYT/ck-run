@@ -765,6 +765,7 @@ def run_boxes(device):
 # ═══════════════════════════════════════════════════════════════════════
 MAXGACHA_DIR = "img/max-gacha"
 _mg_diskfull_lock = threading.Lock()   # กันเคลียร์ disk-full ซ้อน (watchdog vs main thread)
+_mg_fixspace_lock = threading.Lock()   # กันกด fix-space ซ้อน
 
 
 def _mg_click(device, name, timeout=C.PLAY_STEP_TIMEOUT, post_delay=1.2):
@@ -810,13 +811,26 @@ def _mg_disk_full(device, timeout=5):
         _mg_diskfull_lock.release()
 
 
+def _mg_fix_space(device, timeout=5):
+    """เจอ fix-space1 → กด fix-space1 → fix-space6 (รูปอยู่ใน img/ default; lock กันกดซ้อน)"""
+    if not _mg_fixspace_lock.acquire(blocking=False):
+        return
+    try:
+        if M.wait_and_click(device, "fix-space1.png", timeout=timeout, required=False, post_delay=1.2):
+            for i in range(2, 7):
+                M.wait_and_click(device, f"fix-space{i}.png", timeout=10, required=False, post_delay=1.2)
+    finally:
+        _mg_fixspace_lock.release()
+
+
 def _mg_popup_watchdog(device, stop_event):
     """thread เฝ้า popup 'ตลอดเวลา' ระหว่าง maxgacha (เหนือทุก step) แล้วให้ flow หลักทำงานต่อ:
       - disk-full1 กลางจอ → บังคับเคลียร์ disk-full1→disk-full3→fixdisk ทันที
       - fixsumting ค้างต่อเนื่องครบ 3วิ → กด fixsumting1 (รูปอยู่ใน img/)"""
     serial = device.serial
     disk_path = M.img_path("disk-full1.bmp", MAXGACHA_DIR)
-    fixs_path = M.img_path("fixsumting.png")   # อยู่ใน img/ (default folder)
+    fixs_path = M.img_path("fixsumting.png")     # อยู่ใน img/ (default folder)
+    space_path = M.img_path("fix-space1.png")    # อยู่ใน img/ (default folder)
     fixs_seen_since = None
     while M.bot_running and not stop_event.is_set():
         img = M.fast_screencap(device)
@@ -826,7 +840,13 @@ def _mg_popup_watchdog(device, stop_event):
             _mg_disk_full(device, timeout=3)
             fixs_seen_since = None
             continue
-        # 2) fixsumting ค้างครบ 3วิ → กด fixsumting1
+        # 2) fix-space1 → กด fix-space1→6 ทันที (เจอปุ๊บทำปั๊บ เหนือทุกอย่าง)
+        if M.ImgSearchADB(img, space_path):
+            M.log(serial, "🛑 watchdog เจอ fix-space1 → กด fix-space1→6", Fore.YELLOW)
+            _mg_fix_space(device, timeout=3)
+            fixs_seen_since = None
+            continue
+        # 3) fixsumting ค้างครบ 3วิ → กด fixsumting1
         if M.ImgSearchADB(img, fixs_path):
             if fixs_seen_since is None:
                 fixs_seen_since = time.time()
@@ -999,17 +1019,17 @@ def _run_maxgacha_body(device, found):
         M.log(serial, "จบลูป maxgacha3 → ไปต่อ", Fore.CYAN)
     else:
         # ไม่เจอ maxgacha3 → maxgacha4 → #step-ruby (maxgacha5 loop)
+        #   fix-space1 ให้ watchdog เฝ้าเคลียร์ตลอด (เจอปุ๊บทำปั๊บ) — ที่นี่แค่วนกด maxgacha4 จนไม่มี fix-space1 ค้าง
         M.log(serial, "ไม่เจอ maxgacha3 → maxgacha4 (#step-ruby)", Fore.YELLOW)
-        # วนกด maxgacha4: เจอ fix-space1 → กด fix-space1→fix-space6 → วนกด maxgacha4 อีกรอบ (cap 10 รอบ)
         for _round in range(10):
             if not M.bot_running:
                 break
             _mg_click(device, "maxgacha4.bmp", timeout=15)
+            time.sleep(0.5)   # เผื่อ fix-space1 โผล่ → ให้ watchdog เคลียร์
             if not M.ImgSearchADB(M.fast_screencap(device), M.img_path("fix-space1.png")):
-                break   # ไม่เจอ fix-space1 → ไปต่อปกติ
-            M.log(serial, "เจอ fix-space1 → กด fix-space1→6 แล้ววน maxgacha4 อีกรอบ", Fore.YELLOW)
-            for i in range(1, 7):
-                M.wait_and_click(device, f"fix-space{i}.png", timeout=10, required=False, post_delay=1.2)
+                break   # ไม่มี fix-space1 ค้างแล้ว → ไปต่อ
+            M.log(serial, "ยังมี fix-space1 (watchdog เคลียร์อยู่) → วนกด maxgacha4 อีกรอบ", Fore.YELLOW)
+            time.sleep(1.5)
         # กด maxgacha4 แล้วเจอ stop-step2 → cancel → ข้ามไป get-random25 (step2) เลย
         if _mg_stop_step2_jump(device):
             _mg_step2(device, found)
