@@ -936,6 +936,7 @@ def run_maxgacha(device, found):
     _mg_click(device, "maxgacha2.bmp")
 
     if _mg_click(device, "maxgacha3.bmp", timeout=15):
+        _mg_click(device, "fixmaxgacha.bmp", timeout=5)   # หลังกด maxgacha3 → เผื่อมี fixmaxgacha (ไม่เจอใน 5 วิ ข้าม)
         # เจอ maxgacha3 → วน (maxgacha-step1 + สแกน ITEM) จนไม่เจอ maxgacha3 15วิ
         while M.bot_running:
             _mg_scan_items_window(device, found, secs=2.0)   # เว้น 2 วิ หา ITEM ให้ชัวร์ก่อนกด
