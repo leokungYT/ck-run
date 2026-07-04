@@ -3,9 +3,10 @@
     "clean": 1,
     "restore": 1,
     "event": 1,
-    "find": 1,
-    "find_treasure": 1,
-    "box": 0,
+    "find": 0,
+    "find_treasure": 0,
+    "box": 1,
+    "check_ruby": 1,
     "maxgacha": 0,
     "maxpet": 0,
     "export": 1

@@ -14,7 +14,7 @@ CONFIG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config-m
 # ── default steps (ตรงกับ login.py DEFAULTS) ──
 DEFAULT_STEPS = {
     "clean": 1, "restore": 1, "event": 1, "find": 0, "find_treasure": 0, "box": 1,
-    "maxgacha": 1, "maxpet": 1, "export": 1,
+    "check_ruby": 0, "maxgacha": 1, "maxpet": 1, "export": 1,
 }
 STEP_LABELS = {
     "clean":         "ลบข้อมูลเดิมก่อน restore",
@@ -23,13 +23,14 @@ STEP_LABELS = {
     "find":          "Find-pet (ค้นหาชื่อตาม config-findpet.json)",
     "find_treasure": "Find-treasure (สมบัติ ตาม config-treasure.json)",
     "box":           "รับของ Box (box1-5)",
+    "check_ruby":    "Check Ruby (OCR)",
     "maxgacha":      "Max Gacha (สุ่ม item)",
     "maxpet":        "Max Pet (สุ่มจนเจอ trader)",
     "export":        "Export",
 }
-# เปิด find/find_treasure → ปิด step พวกนี้อัตโนมัติ (ต้องรันเดี่ยวๆ)
+# เปิด find/find_treasure → ปิด step พวกนี้อัตโนมัติ (ต้องรันเดี่ยวๆ) — box เปิดพร้อมได้
 FIND_STEPS = ("find", "find_treasure")
-FIND_EXCLUSIVE = ("box", "maxgacha", "maxpet")
+FIND_EXCLUSIVE = ("maxgacha", "maxpet")
 # ค่า default ที่ GUI จัดการ (นอกจาก steps) — path ต่างๆ ไม่แตะ เก็บไว้ในไฟล์ตามเดิม
 GUI_DEFAULTS = {"event_rounds": 2, "start_wait": 15,
                 "extra_check_pet": 0, "extra_pet": "",
@@ -79,7 +80,7 @@ class ConfigWindow(ctk.CTkToplevel):
     def __init__(self, parent):
         super().__init__(parent)
         self.title("⚙  Setup Config (login)")
-        self.geometry("340x740")
+        self.geometry("340x780")
         self.resizable(False, False)
         self.transient(parent)
         self.grab_set()

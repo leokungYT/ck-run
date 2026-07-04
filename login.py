@@ -62,7 +62,7 @@ LOGIN_CONFIG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "co
 
 DEFAULTS = {
     "steps": {"clean": 1, "restore": 1, "event": 1, "find": 0, "find_treasure": 0, "box": 1,
-              "maxgacha": 1, "maxpet": 1, "export": 1},
+              "check_ruby": 0, "maxgacha": 1, "maxpet": 1, "export": 1},
     "event_rounds": C.EVENT_LOOP_ROUNDS,
     "config_name": C.CUSTOM_CONFIG_NAME,
     "input_dir": "input-id",
@@ -1103,6 +1103,7 @@ def process_account(device, serial, zpath):
     time.sleep(LOGIN["start_wait"])
 
     found = set()
+    ruby = None
     try:
         _raise_if_login_failed(device)   # เจอ login-failed ตั้งแต่หลัง start → ยกเลิก
 
@@ -1124,6 +1125,10 @@ def process_account(device, serial, zpath):
         # 4) box — box1 → box2 → box3 (ไม่เจอ 15 วิ → กด box5 แล้วจบ) → box4-5 (ถ้า box=1)
         if step_on("box"):
             run_boxes(device)
+
+        # 4.5) check-ruby — หา checkpoint-ruby.bmp แล้ว OCR เลข (ถ้า check_ruby=1) เก็บไว้ต่อท้ายชื่อ zip
+        if step_on("check_ruby"):
+            ruby = M.run_check_ruby(device)
 
         # 5) maxgacha — สุ่มกาชา item (ถ้า maxgacha=1) จดชื่อ item ที่ math ได้ลง found
         if step_on("maxgacha"):
@@ -1177,6 +1182,8 @@ def process_account(device, serial, zpath):
             out_name, out_dir = base, LOGIN["output_dir"]
         if out_dir == LOGIN["backup_id_dir"]:
             out_name = _count_prefix(out_name)   # เติม (0/N) เฉพาะไฟล์ที่เข้า backup-id
+        if ruby:   # เอาเลข ruby ไว้หน้าสุด ดูง่าย → [315]+<ชื่อ>+[ID]
+            out_name = f"[{ruby}]+" + out_name.rstrip("+")
         out_dir = _shard_dir(out_dir)   # แบ่งเป็น part-XXXX กันไฟล์กระจุกจน Explorer ค้าง
         M.log(serial, f"→ เก็บ {out_name}.zip ใน {out_dir}/", Fore.GREEN)
 
