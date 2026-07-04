@@ -811,14 +811,16 @@ def _mg_disk_full(device, timeout=5):
         _mg_diskfull_lock.release()
 
 
-def _mg_fix_space(device, timeout=5):
-    """เจอ fix-space1 → กด fix-space1 → fix-space6 (รูปอยู่ใน img/ default; lock กันกดซ้อน)"""
+def _mg_fix_space(device):
+    """watchdog เจอ fix-space1 (ข้อความ "Not enough space!") แล้ว → เคลียร์ด้วยการกดปุ่มจริง
+    fix-space2(Confirm)→3(Expand)→4(Confirm)→5(Confirm)→6(X)
+    ⚠️ fix-space1 เป็นแค่ 'ข้อความ' ไว้ detect ไม่ใช่ปุ่ม → ไม่ต้องกด เริ่มที่ fix-space2 เลย
+    (รูปอยู่ใน img/ default; lock กันกดซ้อน)"""
     if not _mg_fixspace_lock.acquire(blocking=False):
         return
     try:
-        if M.wait_and_click(device, "fix-space1.png", timeout=timeout, required=False, post_delay=1.2):
-            for i in range(2, 7):
-                M.wait_and_click(device, f"fix-space{i}.png", timeout=10, required=False, post_delay=1.2)
+        for i in range(2, 7):
+            M.wait_and_click(device, f"fix-space{i}.png", timeout=10, required=False, post_delay=1.2)
     finally:
         _mg_fixspace_lock.release()
 
@@ -840,10 +842,10 @@ def _mg_popup_watchdog(device, stop_event):
             _mg_disk_full(device, timeout=3)
             fixs_seen_since = None
             continue
-        # 2) fix-space1 → กด fix-space1→6 ทันที (เจอปุ๊บทำปั๊บ เหนือทุกอย่าง)
+        # 2) fix-space1 (Not enough space!) → กด Confirm→Expand→Confirm→Confirm→X ทันที (เจอปุ๊บทำปั๊บ เหนือทุกอย่าง)
         if M.ImgSearchADB(img, space_path):
-            M.log(serial, "🛑 watchdog เจอ fix-space1 → กด fix-space1→6", Fore.YELLOW)
-            _mg_fix_space(device, timeout=3)
+            M.log(serial, "🛑 watchdog เจอ fix-space1 (Not enough space) → กด fix-space2→6", Fore.YELLOW)
+            _mg_fix_space(device)
             fixs_seen_since = None
             continue
         # 3) fixsumting ค้างครบ 3วิ → กด fixsumting1
