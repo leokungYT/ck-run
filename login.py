@@ -764,6 +764,7 @@ def run_boxes(device):
 #  ⚠️ ต้องเพิ่มรูป maxgacha-step1.bmp + stop-ruby.bmp (ยังไม่มี — ตอนนี้จะข้าม/พึ่ง safety cap)
 # ═══════════════════════════════════════════════════════════════════════
 MAXGACHA_DIR = "img/max-gacha"
+_mg_diskfull_lock = threading.Lock()   # กันเคลียร์ disk-full ซ้อน (watchdog vs main thread)
 
 
 def _mg_click(device, name, timeout=C.PLAY_STEP_TIMEOUT, post_delay=1.2):
@@ -794,13 +795,31 @@ def _mg_click_when_held(device, name, hold=5, timeout=30, post_delay=1.2):
     return False
 
 
-def _mg_disk_full(device):
-    """แวะหา disk-full1 (5วิ) ไม่เจอข้าม; เจอ → disk-full2 → disk-full3 → fixdisk1 (ค้างครบ 10วิ ค่อยกด) → fixdisk2"""
-    if _mg_click(device, "disk-full1.bmp", timeout=5):
-        _mg_click(device, "disk-full2.bmp", timeout=10)
-        _mg_click(device, "disk-full3.bmp", timeout=10)
-        _mg_click_when_held(device, "fixdisk1.bmp", hold=10, timeout=40)
-        _mg_click(device, "fixdisk2.bmp", timeout=10)
+def _mg_disk_full(device, timeout=5):
+    """แวะหา disk-full1 (timeout วิ) ไม่เจอข้าม; เจอ → disk-full2 → disk-full3 → fixdisk1 (ค้างครบ 10วิ ค่อยกด) → fixdisk2
+    ใช้ lock non-blocking: ถ้าอีก thread (watchdog/main) กำลังเคลียร์อยู่ → ข้าม (กันกดซ้อน)"""
+    if not _mg_diskfull_lock.acquire(blocking=False):
+        return
+    try:
+        if _mg_click(device, "disk-full1.bmp", timeout=timeout):
+            _mg_click(device, "disk-full2.bmp", timeout=10)
+            _mg_click(device, "disk-full3.bmp", timeout=10)
+            _mg_click_when_held(device, "fixdisk1.bmp", hold=10, timeout=40)
+            _mg_click(device, "fixdisk2.bmp", timeout=10)
+    finally:
+        _mg_diskfull_lock.release()
+
+
+def _mg_diskfull_watchdog(device, stop_event):
+    """thread เฝ้าดู disk-full 'ตลอดเวลา' ระหว่าง maxgacha — เจอ disk-full1 กลางจอเมื่อไหร่
+    บังคับเคลียร์ disk-full1→disk-full3→fixdisk ก่อน (เหนือทุก step) แล้วให้ flow หลักทำงานต่อ"""
+    path = M.img_path("disk-full1.bmp", MAXGACHA_DIR)
+    while M.bot_running and not stop_event.is_set():
+        if M.ImgSearchADB(M.fast_screencap(device), path):
+            M.log(device.serial, "🛑 watchdog เจอ disk-full → บังคับเคลียร์ก่อน", Fore.YELLOW)
+            _mg_disk_full(device, timeout=3)
+        else:
+            time.sleep(0.5)
 
 
 def _mg_scan_items(device, found, img=None):
@@ -931,6 +950,20 @@ def _mg_stop_step2_jump(device, timeout=3):
 def run_maxgacha(device, found):
     serial = device.serial
     M.log(serial, "=== MAX-GACHA ===", Fore.GREEN)
+
+    # watchdog เฝ้า disk-full ตลอดช่วง maxgacha (เจอเมื่อไหร่บังคับเคลียร์ก่อน)
+    stop_wd = threading.Event()
+    wd = threading.Thread(target=_mg_diskfull_watchdog, args=(device, stop_wd), daemon=True)
+    wd.start()
+    try:
+        _run_maxgacha_body(device, found)
+    finally:
+        stop_wd.set()
+        wd.join(timeout=2)
+
+
+def _run_maxgacha_body(device, found):
+    serial = device.serial
 
     _mg_click(device, "maxgacha1.bmp")
     _mg_disk_full(device)
