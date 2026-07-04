@@ -13,18 +13,21 @@ CONFIG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config-m
 
 # ── default steps (ตรงกับ login.py DEFAULTS) ──
 DEFAULT_STEPS = {
-    "clean": 1, "restore": 1, "event": 1, "box": 1,
+    "clean": 1, "restore": 1, "event": 1, "find": 0, "box": 1,
     "maxgacha": 1, "maxpet": 1, "export": 1,
 }
 STEP_LABELS = {
     "clean":    "ลบข้อมูลเดิมก่อน restore",
     "restore":  "Restore (push ไฟล์จาก input-id)",
     "event":    "Event Loop (login)",
+    "find":     "Find (ค้นหาชื่อตาม config-fin.json)",
     "box":      "รับของ Box (box1-5)",
     "maxgacha": "Max Gacha (สุ่ม item)",
     "maxpet":   "Max Pet (สุ่มจนเจอ trader)",
     "export":   "Export",
 }
+# เปิด find → ปิด step พวกนี้อัตโนมัติ (find ต้องรันเดี่ยวๆ)
+FIND_EXCLUSIVE = ("box", "maxgacha", "maxpet")
 # ค่า default ที่ GUI จัดการ (นอกจาก steps) — path ต่างๆ ไม่แตะ เก็บไว้ในไฟล์ตามเดิม
 GUI_DEFAULTS = {"event_rounds": 2, "start_wait": 15}
 
@@ -68,7 +71,7 @@ class ConfigWindow(ctk.CTkToplevel):
     def __init__(self, parent):
         super().__init__(parent)
         self.title("⚙  Setup Config (login)")
-        self.geometry("340x500")
+        self.geometry("340x540")
         self.resizable(False, False)
         self.transient(parent)
         self.grab_set()
@@ -79,14 +82,19 @@ class ConfigWindow(ctk.CTkToplevel):
 
         # ── step toggles ──
         self.step_vars = {}
+        self.step_switches = {}
         frame_steps = ctk.CTkFrame(self, fg_color="transparent")
         frame_steps.pack(fill="x", padx=16, pady=(0, 8))
         for key in DEFAULT_STEPS:
             var = ctk.BooleanVar(value=bool(cfg["steps"].get(key, 0)))
             self.step_vars[key] = var
-            ctk.CTkSwitch(frame_steps, text=STEP_LABELS.get(key, key),
-                          variable=var, font=("Segoe UI", 12),
-                          switch_width=40, switch_height=20).pack(anchor="w", pady=3)
+            sw = ctk.CTkSwitch(frame_steps, text=STEP_LABELS.get(key, key),
+                               variable=var, font=("Segoe UI", 12),
+                               switch_width=40, switch_height=20,
+                               command=(self._apply_find_lock if key == "find" else None))
+            sw.pack(anchor="w", pady=3)
+            self.step_switches[key] = sw
+        self._apply_find_lock()   # ตั้งสถานะล็อกเริ่มต้นตามค่าที่โหลดมา
 
         ctk.CTkFrame(self, height=1, fg_color=("gray75", "gray35")).pack(fill="x", padx=16, pady=6)
 
@@ -104,6 +112,20 @@ class ConfigWindow(ctk.CTkToplevel):
 
         ctk.CTkButton(self, text="💾  บันทึก", font=("Segoe UI", 13, "bold"),
                       height=36, corner_radius=8, command=self._save).pack(pady=(14, 10))
+
+    def _apply_find_lock(self):
+        """เปิด find → ปิด box/maxgacha/maxpet อัตโนมัติ + ล็อกสวิตช์ (find รันเดี่ยว)
+        ปิด find → ปลดล็อกให้ปรับได้ตามเดิม"""
+        find_on = self.step_vars["find"].get()
+        for k in FIND_EXCLUSIVE:
+            sw = self.step_switches.get(k)
+            if not sw:
+                continue
+            if find_on:
+                self.step_vars[k].set(False)
+                sw.configure(state="disabled")
+            else:
+                sw.configure(state="normal")
 
     def _save(self):
         steps = {k: (1 if v.get() else 0) for k, v in self.step_vars.items()}

@@ -2,6 +2,12 @@
 __pycache__/
 *.py[cod]
 
+# Virtual env (torch/easyocr ~2GB — DO NOT commit)
+.venv/
+
+# find OCR debug crops
+img/find/_debug/
+
 # Runtime / generated state
 shared_stats.json
 _tmp_*/

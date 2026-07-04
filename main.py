@@ -895,7 +895,7 @@ def get_ocr_reader():
                 import easyocr
                 ssl._create_default_https_context = ssl._create_unverified_context
                 print(f"{Fore.YELLOW}[OCR] กำลังโหลดโมเดล EasyOCR (ครั้งแรกครั้งเดียว)...{Style.RESET_ALL}")
-                _ocr_reader = easyocr.Reader(['en'], gpu=False)
+                _ocr_reader = easyocr.Reader(['en'], gpu=False, verbose=False)   # verbose=False กัน progress bar (█) crash บน console ไทย (cp874)
                 print(f"{Fore.GREEN}[OCR] โหลดโมเดลเสร็จ{Style.RESET_ALL}")
     return _ocr_reader
 

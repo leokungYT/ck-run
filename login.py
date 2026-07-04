@@ -61,7 +61,7 @@ NO_WINDOW = {'creationflags': subprocess.CREATE_NO_WINDOW} if os.name == 'nt' el
 LOGIN_CONFIG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config-main.json")
 
 DEFAULTS = {
-    "steps": {"clean": 1, "restore": 1, "event": 1, "box": 1,
+    "steps": {"clean": 1, "restore": 1, "event": 1, "find": 0, "box": 1,
               "maxgacha": 1, "maxpet": 1, "export": 1},
     "event_rounds": C.EVENT_LOOP_ROUNDS,
     "config_name": C.CUSTOM_CONFIG_NAME,
@@ -70,6 +70,8 @@ DEFAULTS = {
     "backup_id_dir": "backup-id",
     "random_fail_dir": "random-Fail",
     "login_failed_dir": "login-failed",
+    "found_dir": "id-found",
+    "not_found_dir": "not-found",
     "failed_dir": "input-id/_failed",
     "claim_dir": "input-id/_processing",
     "start_wait": 15,
@@ -93,7 +95,7 @@ def load_login_config():
                     cfg["steps"][key] = 1 if v else 0
             for k in ("event_rounds", "config_name", "input_dir", "output_dir",
                       "backup_id_dir", "random_fail_dir", "login_failed_dir",
-                      "failed_dir", "claim_dir", "start_wait", "shard_size"):
+                      "found_dir", "not_found_dir", "failed_dir", "claim_dir", "start_wait", "shard_size"):
                 if k in loaded:
                     cfg[k] = loaded[k]
             print(f"{Fore.GREEN}[CONFIG] โหลด {os.path.basename(LOGIN_CONFIG_FILE)} แล้ว{Style.RESET_ALL}")
@@ -382,6 +384,7 @@ EVENT_NAMES = ("event-back.bmp", "git-item.bmp", "ok-gifitem.bmp", "fixnews.bmp"
 
 EVENT_CHECKPOINT = "check-pointevent.bmp"   # รูป checkpoint ก่อนเข้าหน้า event
 EVENT_CHECKPOINT_TIMEOUT = 60               # รอ checkpoint กี่วิ (ไม่เจอ → เริ่ม event เลย)
+EVENT_STOP_IMG = "stopeventloop.png"        # เจอรูปนี้ → break EVENT LOOP ทันที (ไม่ต้องครบรอบ)
 
 
 def wait_event_checkpoint(device):
@@ -407,11 +410,138 @@ def wait_event_checkpoint(device):
 
 def run_event_loops(device):
     serial = device.serial
+    stop_path = M.img_path(EVENT_STOP_IMG)
     for rnd in range(1, C.EVENT_LOOP_ROUNDS + 1):
         _raise_if_login_failed(device)   # เจอ login-failed ระหว่าง event → ยกเลิกบัญชี
+        # เจอ stopeventloop → break ออกเลย ไม่ต้องทำครบรอบ
+        if M.ImgSearchADB(M.fast_screencap(device), stop_path):
+            M.log(serial, f"เจอ {EVENT_STOP_IMG} → หยุด EVENT LOOP (รอบ {rnd}/{C.EVENT_LOOP_ROUNDS})", Fore.YELLOW)
+            break
         M.log(serial, f"=== EVENT LOOP รอบ {rnd}/{C.EVENT_LOOP_ROUNDS} ===", Fore.GREEN)
         for name in EVENT_NAMES:
             M.handle_repeating(device, name, appear_timeout=EVENT_APPEAR_TIMEOUT)
+
+
+# ═══════════════════════════════════════════════════════════════════════
+#  STEP: find — ค้นหาชื่อตาม config-fin.json (หลัง event, ถ้า step find=1)
+#  fin1 (เข้าครั้งเดียว) → วนแต่ละชื่อ:
+#     fin2 → fin3 → พิมพ์ชื่อ+Enter → confirm → OCR ที่ FIN_REGION เทียบว่าตรงชื่อที่ค้นไหม
+#     เจอตรง → จดชื่อลง found (เอาไปตั้งชื่อไฟล์ตอน export: ชื่อที่เจอ + ชื่อเดิม)
+#  วนจนครบรายชื่อ → กด exit ปิดหน้า
+#  ⚠️ ต้องมีรูปใน img/find/: fin1 fin2 fin3 confirm exit (.png) + config-fin.json
+# ═══════════════════════════════════════════════════════════════════════
+FIN_DIR = "img/find"
+FIN_REGION = (18, 130, 231, 33)   # (x, y, w, h) ตำแหน่งชื่อผลลัพธ์บนจอ สำหรับ OCR
+FIN_CONFIG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config-fin.json")
+
+
+def load_fin_names():
+    """อ่านรายชื่อจาก config-fin.json (key 'fin') → list เรียงตามไฟล์ (บรรทัดแรก = ตัวแรก)"""
+    try:
+        with open(FIN_CONFIG_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return [str(n).strip() for n in data.get("fin", []) if str(n).strip()]
+    except FileNotFoundError:
+        print(f"{Fore.YELLOW}[FIND] ไม่เจอ {os.path.basename(FIN_CONFIG_FILE)} → ข้าม find{Style.RESET_ALL}")
+    except Exception as e:
+        print(f"{Fore.YELLOW}[FIND] อ่าน config-fin.json ไม่ได้: {e}{Style.RESET_ALL}")
+    return []
+
+
+def _fin_norm(s):
+    """normalize ชื่อ: เหลือแต่ a-z0-9 ตัวเล็ก (กัน OCR เพี้ยน/ช่องว่าง/สัญลักษณ์)"""
+    return re.sub(r"[^a-z0-9]", "", (s or "").lower())
+
+
+FIN_DEBUG_DIR = "img/find/_debug"   # เซฟรูป crop ที่สแกนไว้ดูว่าจับตำแหน่งถูกไหม
+
+
+def _fin_ocr(device):
+    """OCR ข้อความที่ FIN_REGION → คืน string หรือ '' (screencap เป็น gray อยู่แล้ว)
+    + debug: log ค่า raw ที่อ่านได้ และเซฟรูป crop ลง FIN_DEBUG_DIR"""
+    serial = device.serial
+    img = M.fast_screencap(device)
+    if img is None:
+        M.log(serial, "[find-ocr] screencap = None", Fore.YELLOW)
+        return ""
+    x, y, w, h = FIN_REGION
+    H, W = img.shape[:2]
+    if x < 0 or y < 0 or x + w > W or y + h > H:
+        M.log(serial, f"[find-ocr] ⚠️ region {FIN_REGION} เกินขอบจอ {W}x{H}", Fore.YELLOW)
+        return ""
+    crop = img[y:y + h, x:x + w]
+    if crop.size == 0:
+        return ""
+    big = M.cv2.resize(crop, None, fx=3, fy=3, interpolation=M.cv2.INTER_CUBIC)
+    otsu = M.cv2.threshold(big, 0, 255, M.cv2.THRESH_BINARY + M.cv2.THRESH_OTSU)[1]
+    inv = M.cv2.bitwise_not(otsu)   # เผื่อตัวหนังสือขาวบนพื้นเข้ม
+    # เซฟ crop ไว้ดู (crop ปกติ + otsu)
+    try:
+        os.makedirs(FIN_DEBUG_DIR, exist_ok=True)
+        safe = serial.replace(".", "_").replace(":", "_")
+        M.cv2.imwrite(os.path.join(FIN_DEBUG_DIR, f"crop_{safe}.png"), big)
+        M.cv2.imwrite(os.path.join(FIN_DEBUG_DIR, f"crop_{safe}_otsu.png"), otsu)
+    except Exception:
+        pass
+    reader = M.get_ocr_reader()
+    text = ""
+    for cand in (big, otsu, inv):
+        try:
+            res = reader.readtext(cand, detail=0)
+        except Exception as e:
+            M.log(serial, f"[find-ocr] OCR error: {e}", Fore.YELLOW)
+            res = []
+        text = " ".join(res).strip()
+        M.log(serial, f"[find-ocr] region={FIN_REGION} จอ={W}x{H} raw={res} → '{text}'", Fore.CYAN)
+        if text:
+            break
+    return text
+
+
+def _fin_scan_match(device, name):
+    """OCR FIN_REGION แล้วเช็คว่าตรงกับ name ที่ค้นไหม (normalize + เผื่อ substring กัน OCR เพี้ยน)
+    คืน (ตรงไหม, ข้อความที่ OCR ได้)"""
+    text = _fin_ocr(device)
+    nt, nn = _fin_norm(text), _fin_norm(name)
+    ok = bool(nn) and bool(nt) and (nn == nt or nn in nt or nt in nn)
+    return ok, text
+
+
+def run_find(device, found):
+    """ค้นหาชื่อตาม config-fin.json → จดชื่อที่เจอลง found"""
+    serial = device.serial
+    names = load_fin_names()
+    if not names:
+        M.log(serial, "ไม่มีชื่อใน config-fin.json → ข้าม find", Fore.YELLOW)
+        return
+    M.log(serial, f"=== FIND ({len(names)} ชื่อ) ===", Fore.GREEN)
+
+    M.wait_and_click(device, "fin1.png", folder=FIN_DIR, required=False, post_delay=1.2)
+    for i, name in enumerate(names, 1):
+        if not M.bot_running:
+            break
+        _raise_if_login_failed(device)
+        M.log(serial, f"--- find {i}/{len(names)}: {name} ---", Fore.CYAN)
+        M.wait_and_click(device, "fin2.png", folder=FIN_DIR, required=False, post_delay=1.0)
+        M.wait_and_click(device, "fin3.png", folder=FIN_DIR, required=False, post_delay=1.0)
+        # กรอกชื่อ + Enter
+        device.shell(f"input text '{name}'")
+        time.sleep(0.8)
+        device.shell("input keyevent 66")   # KEYCODE_ENTER
+        time.sleep(1.2)
+        # confirm
+        M.wait_and_click(device, "confirm.png", folder=FIN_DIR, required=False, post_delay=1.5)
+        # สแกน FIN_REGION ว่าตรงกับชื่อที่ค้นไหม
+        ok, text = _fin_scan_match(device, name)
+        if ok:
+            found.add(name)
+            M.log(serial, f"⭐ find เจอ: {name} (OCR='{text}')", Fore.GREEN)
+        else:
+            M.log(serial, f"find ไม่ตรง: {name} (OCR='{text}')", Fore.YELLOW)
+
+    M.wait_and_click(device, "exit.png", folder=FIN_DIR, required=False, post_delay=1.0)
+    hit = [n for n in names if n in found]
+    M.log(serial, f"จบ find → เจอ {len(hit)}/{len(names)}: {hit}", Fore.GREEN)
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -801,6 +931,10 @@ def process_account(device, serial, zpath):
             run_event_loops(device)
         M.log(serial, "login เสร็จ → ทำ config เพิ่ม (box / maxgacha)", Fore.CYAN)
 
+        # 3.5) find — ค้นหาชื่อตาม config-fin.json (ถ้า find=1) จดชื่อที่เจอลง found
+        if step_on("find"):
+            run_find(device, found)
+
         # 4) box — box1 → box2 → box3 (ไม่เจอ 15 วิ → กด box5 แล้วจบ) → box4-5 (ถ้า box=1)
         if step_on("box"):
             run_boxes(device)
@@ -820,7 +954,15 @@ def process_account(device, serial, zpath):
     #    maxgacha: เจอ item → backup-id (ชื่อ = item + เดิม) | สุ่มไม่ได้อะไรเลย → random-Fail (ชื่อเดิม)
     #    ไม่งั้น → กติกา trader (decide_login_export)
     if step_on("export"):
-        if step_on("maxgacha"):
+        if step_on("find"):
+            # find: เจอ → id-found (ชื่อที่ OCR เจอทั้งหมดเรียงตาม config-fin.json + ชื่อเดิม)
+            #       ไม่เจอเลย → not-found (ชื่อเดิม)
+            fin_found = [n for n in load_fin_names() if n in found]
+            if fin_found:
+                out_name, out_dir = "+".join(fin_found) + "+" + base, LOGIN["found_dir"]
+            else:
+                out_name, out_dir = base, LOGIN["not_found_dir"]
+        elif step_on("maxgacha"):
             if found:
                 out_name, out_dir = _combine_name(base, found), LOGIN["backup_id_dir"]
             else:
@@ -1002,7 +1144,8 @@ def _sweep_stale_tmp():
     """กวาดโฟลเดอร์ staging ที่ค้างจากรอบก่อน (เวอร์ชันเก่าเคยสร้าง _tmp_* ไว้ในโฟลเดอร์ผลลัพธ์)
     ไล่ลบ _tmp_* / cklogin_* ทั้งใน out_dir และ part-XXXX ย่อย → โฟลเดอร์ผลลัพธ์สะอาด"""
     out_dirs = [LOGIN["output_dir"], LOGIN["backup_id_dir"],
-                LOGIN["random_fail_dir"], LOGIN["login_failed_dir"]]
+                LOGIN["random_fail_dir"], LOGIN["login_failed_dir"],
+                LOGIN["found_dir"], LOGIN["not_found_dir"]]
     removed = 0
     for base in out_dirs:
         if not os.path.isdir(base):
