@@ -1000,7 +1000,16 @@ def _run_maxgacha_body(device, found):
     else:
         # ไม่เจอ maxgacha3 → maxgacha4 → #step-ruby (maxgacha5 loop)
         M.log(serial, "ไม่เจอ maxgacha3 → maxgacha4 (#step-ruby)", Fore.YELLOW)
-        _mg_click(device, "maxgacha4.bmp", timeout=15)
+        # วนกด maxgacha4: เจอ fix-space1 → กด fix-space1→fix-space6 → วนกด maxgacha4 อีกรอบ (cap 10 รอบ)
+        for _round in range(10):
+            if not M.bot_running:
+                break
+            _mg_click(device, "maxgacha4.bmp", timeout=15)
+            if not M.ImgSearchADB(M.fast_screencap(device), M.img_path("fix-space1.png")):
+                break   # ไม่เจอ fix-space1 → ไปต่อปกติ
+            M.log(serial, "เจอ fix-space1 → กด fix-space1→6 แล้ววน maxgacha4 อีกรอบ", Fore.YELLOW)
+            for i in range(1, 7):
+                M.wait_and_click(device, f"fix-space{i}.png", timeout=10, required=False, post_delay=1.2)
         # กด maxgacha4 แล้วเจอ stop-step2 → cancel → ข้ามไป get-random25 (step2) เลย
         if _mg_stop_step2_jump(device):
             _mg_step2(device, found)
