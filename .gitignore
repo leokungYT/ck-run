@@ -18,5 +18,9 @@ backup/*.xml
 push-file-ck/backup/*
 push-file-ck/input-id/*
 
+# input-id: ผู้ใช้เลือกอัพขึ้น GitHub (public) — override *.zip เฉพาะโฟลเดอร์นี้
+!input-id/
+!input-id/**
+
 # keep empty folders in the repo
 !**/.gitkeep

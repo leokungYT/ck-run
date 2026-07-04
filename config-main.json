@@ -6,8 +6,8 @@
     "find": 0,
     "find_treasure": 0,
     "box": 1,
-    "check_ruby": 1,
-    "maxgacha": 0,
+    "check_ruby": 0,
+    "maxgacha": 1,
     "maxpet": 0,
     "export": 1
   },
