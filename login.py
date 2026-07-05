@@ -872,23 +872,70 @@ def _mg_fix_space(device, blocking=True):
         n = _mg_click_until_gone(device, "fix-space2new.bmp", threshold=FIX_SPACE_THRESHOLD)
         M.log(device.serial, f"  fix-space2new: {'กดแล้ว' if n else 'ไม่เจอ (ข้าม)'}", Fore.CYAN)
 
-        # 3) fix-space3 (กดแค่รอบเดียว)
+        # 3) fix-space3 (รอจนเจอ — ถ้ารูปเดิมค้างเกิน 5วิ ให้ลองกดรูปเดิมก่อน อย่าข้ามจนกว่าจะเจอ)
         path3 = M.img_path("fix-space3.png")
-        pts = M.ImgSearchADB(M.fast_screencap(device), path3, FIX_SPACE_THRESHOLD)
-        if pts:
-            M.tap(device, *pts[0])
-            M.log(device.serial, f"  fix-space3: กดแล้ว (รอบเดียว) ที่ {pts[0]}", Fore.CYAN)
-        else:
-            M.log(device.serial, "  fix-space3: ไม่เจอ (ข้าม)", Fore.CYAN)
-
-        # 4) fix-space4→5 (กดแค่รอบเดียว)
-        for i in range(4, 6):
-            p = M.img_path(f"fix-space{i}.png")
-            pts = M.ImgSearchADB(M.fast_screencap(device), p, FIX_SPACE_THRESHOLD)
+        prev3 = M.img_path("fix-space2new.bmp")   # รูปก่อนหน้า (fix-space2new)
+        _wait_next = time.time()
+        _prev_seen3 = None
+        _found3 = False
+        while M.bot_running and time.time() - _wait_next < 30:
+            img = M.fast_screencap(device)
+            pts = M.ImgSearchADB(img, path3, FIX_SPACE_THRESHOLD)
             if pts:
                 M.tap(device, *pts[0])
-                M.log(device.serial, f"  fix-space{i}: กดแล้ว (รอบเดียว) ที่ {pts[0]}", Fore.CYAN)
+                M.log(device.serial, f"  fix-space3: กดแล้ว ที่ {pts[0]}", Fore.CYAN)
+                _found3 = True
+                time.sleep(0.6)
+                break
+            # ถ้ารูปเดิม (fix-space2new) ยังค้างอยู่เกิน 5วิ → ลองกดมัน
+            prev_pts = M.ImgSearchADB(img, prev3, FIX_SPACE_THRESHOLD)
+            if prev_pts:
+                if _prev_seen3 is None:
+                    _prev_seen3 = time.time()
+                elif time.time() - _prev_seen3 >= 5:
+                    M.tap(device, *prev_pts[0])
+                    M.log(device.serial, "  fix-space3: รูปเดิม (fix-space2new) ค้างเกิน 5s → ลองกดรูปเดิม", Fore.YELLOW)
+                    _prev_seen3 = time.time()   # รีเซ็ตตัวนับ
+                    time.sleep(0.6)
+                    continue
             else:
+                _prev_seen3 = None
+            time.sleep(0.4)
+        if not _found3:
+            M.log(device.serial, "  fix-space3: ไม่เจอ (ข้าม)", Fore.CYAN)
+
+        # 4) fix-space4→5 (รอจนเจอ — ถ้ารูปเดิมค้างเกิน 5วิ ให้ลองกดรูปเดิมก่อน อย่าข้ามจนกว่าจะเจอ)
+        prev_names = {4: "fix-space3.png", 5: "fix-space4.png"}
+        for i in range(4, 6):
+            p = M.img_path(f"fix-space{i}.png")
+            prev_p = M.img_path(prev_names[i])
+            _wait_start = time.time()
+            _prev_seen = None
+            _found_i = False
+            while M.bot_running and time.time() - _wait_start < 30:
+                img = M.fast_screencap(device)
+                pts = M.ImgSearchADB(img, p, FIX_SPACE_THRESHOLD)
+                if pts:
+                    M.tap(device, *pts[0])
+                    M.log(device.serial, f"  fix-space{i}: กดแล้ว ที่ {pts[0]}", Fore.CYAN)
+                    _found_i = True
+                    time.sleep(0.6)
+                    break
+                # ถ้ารูปก่อนหน้ายังค้างอยู่เกิน 5วิ → ลองกดมัน
+                prev_pts = M.ImgSearchADB(img, prev_p, FIX_SPACE_THRESHOLD)
+                if prev_pts:
+                    if _prev_seen is None:
+                        _prev_seen = time.time()
+                    elif time.time() - _prev_seen >= 5:
+                        M.tap(device, *prev_pts[0])
+                        M.log(device.serial, f"  fix-space{i}: รูปเดิม ({prev_names[i]}) ค้างเกิน 5s → ลองกดรูปเดิม", Fore.YELLOW)
+                        _prev_seen = time.time()   # รีเซ็ตตัวนับ
+                        time.sleep(0.6)
+                        continue
+                else:
+                    _prev_seen = None
+                time.sleep(0.4)
+            if not _found_i:
                 M.log(device.serial, f"  fix-space{i}: ไม่เจอ (ข้าม)", Fore.CYAN)
 
         # 5) fix-space6 (กดแค่รอบเดียว)
