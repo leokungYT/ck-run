@@ -1114,9 +1114,9 @@ def _run_maxgacha_body(device, found):
 
     # วนลูป maxgacha4 → fix-space → disk-full → maxgacha5 → draw-again จนกว่าจะเจอ stop-step2
     round_num = 0
-    while M.bot_running:
+    while M.bot_running and round_num < 5:
         round_num += 1
-        M.log(serial, f"--- maxgacha4 loop รอบ {round_num} ---", Fore.CYAN)
+        M.log(serial, f"--- maxgacha4 loop รอบ {round_num}/5 ---", Fore.CYAN)
 
         if not _mg_click(device, "maxgacha4.bmp", timeout=8):
             _mg_click(device, "maxgacha4fix.bmp", timeout=8)  # ลดราคา → ใช้รูปอีกแบบ
