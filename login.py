@@ -1112,20 +1112,25 @@ def _run_maxgacha_body(device, found):
     else:
         M.log(serial, "ไม่เจอ maxgacha3 → ไป maxgacha4 เลย", Fore.YELLOW)
 
-    # maxgacha4 (ทำเสมอ ไม่ว่าจะเจอ maxgacha3 หรือไม่)
-    _mg_click(device, "maxgacha4.bmp", timeout=15)
-    # หลังกด maxgacha4 → หา fix-space1 5วิ ถ้าเจอ → เคลียร์ fix-space2→6 ให้จบก่อน ค่อยทำงานตามปกติ
-    _mg_fix_space_check(device, timeout=5)
-    # กด maxgacha4 แล้วเจอ stop-step2 → cancel → ข้ามไป get-random25 (step2) เลย
-    if _mg_stop_step2_jump(device):
-        _mg_step2(device, found)
-        return
-    # #step-ruby: disk-full (5วิ ไม่เจอข้าม) → maxgacha5 รัวจนไม่เจอ 5วิ + สแกน ITEM_GET_MAP
-    _mg_disk_full(device)
-    _mg_spam_until_gone(device, "maxgacha5.bmp", absent=5, found=found)
+    # วนลูป maxgacha4 → fix-space → disk-full → maxgacha5 → draw-again จนกว่าจะเจอ stop-step2
+    round_num = 0
+    while M.bot_running:
+        round_num += 1
+        M.log(serial, f"--- maxgacha4 loop รอบ {round_num} ---", Fore.CYAN)
 
-    # common tail
-    _mg_draw_again(device)
+        if not _mg_click(device, "maxgacha4.bmp", timeout=8):
+            _mg_click(device, "maxgacha4fix.bmp", timeout=8)  # ลดราคา → ใช้รูปอีกแบบ
+        # หลังกด maxgacha4 → หา fix-space1 5วิ ถ้าเจอ → เคลียร์ fix-space2→6 ให้จบก่อน ค่อยทำงานตามปกติ
+        _mg_fix_space_check(device, timeout=5)
+        # เจอ stop-step2 → ออกลูปไป step2 เลย
+        if _mg_stop_step2_jump(device):
+            break
+        # #step-ruby: disk-full (5วิ ไม่เจอข้าม) → maxgacha5 รัวจนไม่เจอ 5วิ + สแกน ITEM_GET_MAP
+        _mg_disk_full(device)
+        _mg_spam_until_gone(device, "maxgacha5.bmp", absent=5, found=found)
+        _mg_draw_again(device)
+
+    # เจอ stop-step2 แล้ว → ไป step2
     _mg_step2(device, found)
 
 
