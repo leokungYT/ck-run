@@ -1054,11 +1054,17 @@ def _mg_spam_until_gone(device, name, absent=5, found=None):
 
 
 def _mg_draw_again(device):
-    """draw-agin → disk-full → ok-get (รัวจนหาย 5วิ) วนไปจนเจอ stop-ruby → cancel1 → cancel2"""
+    """draw-agin → disk-full → ok-get (รัวจนหาย 5วิ) วนไปจนเจอ stop-step2 / stop-ruby
+    ไม่ break ตอนไม่เจอ draw-agin (เพราะอาจเป็นเพราะ disk-full/fixdisk ค้างอยู่) → วนหาต่อไปเรื่อยๆ"""
     serial = device.serial
     M.log(serial, "--- draw-agin loop ---", Fore.MAGENTA)
     start = time.time()
     while M.bot_running and time.time() - start < C.LOOP_MAX_SECS:
+        # รอให้ watchdog จัดการ disk-full/fixdisk เสร็จก่อน (กันหน้าจอยังเป็น fixdisk แล้วหาปุ่มไม่เจอ)
+        _dfl = _mg_dev_lock(_mg_diskfull_locks, device.serial)
+        _dfl.acquire()
+        _dfl.release()
+
         img = M.fast_screencap(device)
         # เจอ stop-step2 → cancel-step2 → cancel-step2v1 → break ออกไป get-random25 (step2) เลย
         if M.ImgSearchADB(img, M.img_path("stop-step2.bmp", MAXGACHA_DIR)):
@@ -1076,7 +1082,8 @@ def _mg_draw_again(device):
             _mg_disk_full(device)
             _mg_spam_until_gone(device, "ok-get.bmp", absent=5)
         else:
-            break   # ไม่เจอ draw-agin แล้ว → ออก
+            # ไม่เจอ draw-agin → ยังไม่ break (อาจเป็นเพราะ popup อื่นค้าง) → วนหาต่อ
+            time.sleep(0.3)
     M.log(serial, "จบ draw-agin loop", Fore.CYAN)
 
 
