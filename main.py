@@ -250,7 +250,7 @@ def get_connected_devices():
 # ═══════════════════════════════════════════════════════════════════
 #  Screencap + Image search  (วิธีเดียวกับ pes/main-pes.py)
 # ═══════════════════════════════════════════════════════════════════
-_MIN_SCREENCAP_INTERVAL = 0.25
+_MIN_SCREENCAP_INTERVAL = 0.15
 _LAST_SCREENCAP_TS = {}
 
 
