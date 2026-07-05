@@ -24,6 +24,8 @@
   "claim_dir": "input-id/_processing",
   "start_wait": 15,
   "shard_size": 0,
+  "log_dir": "logs",
+  "log_console": 1,
   "extra_check_pet": 0,
   "extra_pet": "trader",
   "extra_check_sombut": 0,

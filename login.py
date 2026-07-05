@@ -76,6 +76,8 @@ DEFAULTS = {
     "claim_dir": "input-id/_processing",
     "start_wait": 15,
     "shard_size": 0,   # แบ่ง output เป็นโฟลเดอร์ย่อย part-XXXX ละกี่ไฟล์ (0 = ไม่แบ่ง กองรวมใน backup-id เลย)
+    "log_dir": "logs",       # แยก log ต่อเครื่อง → logs/<serial>.log
+    "log_console": 1,        # 1 = พิมพ์ขึ้นคอนโซลด้วย (tee) | 0 = เขียนแต่ไฟล์ (คอนโซลเงียบ)
     "extra_check_pet": 0,     # find-pet: บังคับต้องเจอชื่อ extra_pet ไม่งั้นปัด → not-found (0 = ปิด)
     "extra_pet": "",          # ชื่อบังคับของ find-pet (ควรอยู่ใน config-findpet.json เช่น trader)
     "extra_check_sombut": 0,  # find-treasure: บังคับต้องเจอชื่อ extra_sombut ไม่งั้นปัด → not-found (0 = ปิด)
@@ -100,6 +102,7 @@ def load_login_config():
             for k in ("event_rounds", "config_name", "input_dir", "output_dir",
                       "backup_id_dir", "random_fail_dir", "login_failed_dir",
                       "found_dir", "not_found_dir", "failed_dir", "claim_dir", "start_wait", "shard_size",
+                      "log_dir", "log_console",
                       "extra_check_pet", "extra_pet", "extra_check_sombut", "extra_sombut"):
                 if k in loaded:
                     cfg[k] = loaded[k]
@@ -112,6 +115,8 @@ def load_login_config():
     cfg["event_rounds"] = int(cfg["event_rounds"])
     cfg["start_wait"] = int(cfg["start_wait"])
     cfg["shard_size"] = int(cfg["shard_size"])
+    cfg["log_console"] = 1 if cfg.get("log_console", 1) else 0
+    cfg["log_dir"] = str(cfg.get("log_dir", "logs")).strip() or "logs"
     cfg["extra_check_pet"] = 1 if cfg.get("extra_check_pet") else 0
     cfg["extra_pet"] = str(cfg.get("extra_pet", "")).strip()
     cfg["extra_check_sombut"] = 1 if cfg.get("extra_check_sombut") else 0
@@ -1592,6 +1597,56 @@ def worker(serial, input_dir):
 #  multiprocess: 1 process / 1 เครื่อง — ลื่นสุดสำหรับหลายจอ (เลี่ยง GIL)
 #  ระบบ claim ไฟล์ (lock) ทำงานข้าม process ได้อยู่แล้ว → พฤติกรรมเหมือนเดิม
 # ═══════════════════════════════════════════════════════════════════════
+# ── แยก log ต่อเครื่อง → logs/<serial>.log ────────────────────────────────
+_ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")   # ตัด escape สี ANSI ออกก่อนเขียนไฟล์ (ให้ไฟล์อ่านง่าย)
+
+
+class _TeeLog:
+    """เขียนออกทั้งไฟล์ (ตัดสี ANSI) และคอนโซลเดิม (คงสีไว้ ถ้า console ไม่ None)"""
+    def __init__(self, logfile, console):
+        self.logfile = logfile
+        self.console = console
+
+    def write(self, s):
+        if self.console is not None:
+            try:
+                self.console.write(s)
+            except Exception:
+                pass
+        try:
+            self.logfile.write(_ANSI_RE.sub("", s))
+        except Exception:
+            pass
+
+    def flush(self):
+        for st in (self.console, self.logfile):
+            if st is not None:
+                try:
+                    st.flush()
+                except Exception:
+                    pass
+
+
+def _setup_device_log(serial):
+    """redirect stdout/stderr ของ process นี้ → logs/<serial>.log (จับ M.log/print/traceback ครบ)
+    ตัดสี ANSI ในไฟล์ + tee ขึ้นคอนโซลด้วยถ้า log_console=1. คืน path ของไฟล์ log"""
+    log_dir = LOGIN.get("log_dir", "logs")
+    try:
+        os.makedirs(log_dir, exist_ok=True)
+        safe = serial.replace(".", "_").replace(":", "_")
+        logpath = os.path.join(log_dir, f"{safe}.txt")   # ไฟล์ text แยกต่อเครื่อง (debug ง่าย)
+        logf = open(logpath, "a", encoding="utf-8", buffering=1)   # line-buffered → tail real-time ได้
+        logf.write(f"\n===== START {serial} @ {time.strftime('%Y-%m-%d %H:%M:%S')} =====\n")
+        console = sys.stdout if LOGIN.get("log_console", 1) else None
+        tee = _TeeLog(logf, console)
+        sys.stdout = tee
+        sys.stderr = tee
+        return logpath
+    except Exception as e:
+        print(f"{Fore.YELLOW}[LOG] ตั้ง log ต่อเครื่องไม่ได้: {e}{Style.RESET_ALL}")
+        return None
+
+
 def _stop_watcher(stop_event):
     """thread เล็กๆ ในแต่ละ process: parent สั่ง stop → ตั้ง M.bot_running=False
     (ลูปเดิมที่เช็ค bot_running จะหยุดเองหลังจบบัญชีปัจจุบัน)"""
@@ -1603,6 +1658,9 @@ def device_worker(serial, index, input_dir, stop_event, result_q):
     """entry ของแต่ละ process — ตั้งค่า ADB/root/priority ของตัวเอง แล้ววนทำงาน"""
     signal.signal(signal.SIGINT, signal.SIG_IGN)   # ปล่อยให้ parent จัดการ Ctrl+C (ผ่าน stop_event)
     load_login_config()
+    logpath = _setup_device_log(serial)            # แยก log ต่อเครื่อง → logs/<serial>.txt
+    if logpath:
+        M.log(serial, f"เขียน log ที่: {logpath}", Fore.CYAN)
     M.find_adb_executable()
     M.set_process_priority()                       # BELOW_NORMAL → สละ CPU ให้ UI ลื่น
     M.MUMU_MANAGER_PATH = M.find_mumu_manager() or ""
@@ -1665,6 +1723,8 @@ def main():
     dev_idx = [(s, M.SERIAL_TO_INDEX.get(s, C.MUMU_INDEX)) for s in devices]
     print(f"{Fore.GREEN}[OK] เจอ {len(devices)} device: {devices} | รอทำ ~{len(pending)} บัญชี "
           f"(multiprocess แยกจอ){Style.RESET_ALL}")
+    print(f"{Fore.CYAN}[LOG] แยก log ต่อเครื่องที่ {LOGIN['log_dir']}/<serial>.txt "
+          f"(log_console={LOGIN['log_console']}){Style.RESET_ALL}")
 
     stop_event = mp.Event()
     result_q = mp.Queue()

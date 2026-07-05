@@ -12,6 +12,9 @@ img/find/_debug/
 shared_stats.json
 _tmp_*/
 
+# per-device logs (อาจมี member ID / ชื่อบัญชี — ไม่ publish)
+logs/
+
 # Account data — DO NOT publish (game saves contain member IDs)
 *.zip
 backup/*.xml
