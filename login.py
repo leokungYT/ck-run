@@ -1148,7 +1148,7 @@ def _mg_step2(device, found=None, absent=1):
         retries = 0
         max_retries = 3
         cancel_attempts = 0
-        max_cancel_attempts = 1
+        max_cancel_attempts = 3
         found_stop = False
         while M.bot_running and time.time() - start < C.LOOP_MAX_SECS:
             img = M.fast_screencap(device)
