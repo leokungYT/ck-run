@@ -1022,49 +1022,65 @@ def _mg_draw_again(device):
 def _mg_step2(device, found=None, absent=8):
     """get-random25 → disk-full → ok-getstep2 (รัวจนเจอ stop-step2) → cancel-step2 (+v1/v2/v3)
     ออกจากลูปเมื่อ: เจอ stop-step2 เท่านั้น (ไม่เจอ ok-getstep2 ครบ absent วิ → กด get-random25 ใหม่แล้ววนต่อ)
+    ถ้า retry เกิน 5 ครั้ง → กด cancel-step2v2/v3 แล้วเริ่ม step2 ใหม่ตั้งแต่ต้น
     ระหว่างวนสแกน ITEM_GET_MAP ทุกเฟรม + เว้นจังหวะ 2 วิ หลังกดรับของ (กันหาพลาด/ไม่จด)"""
     serial = device.serial
     stop_path = M.img_path("stop-step2.bmp", MAXGACHA_DIR)
-    M.log(serial, "=== STEP2 ===", Fore.GREEN)
-    if not _mg_click(device, "get-random25.bmp", timeout=15):
-        M.log(serial, "ไม่เจอ get-random25 → กด fix-random25 แล้วหา get-random25 ใหม่", Fore.YELLOW)
-        _mg_click(device, "fix-random25.bmp", timeout=10)
-        if not _mg_click(device, "get-random25.bmp", timeout=15):
-            M.log(serial, "⚠️ ยังไม่เจอ get-random25 หลัง fix-random25 (หน้า step2 อาจยังไม่เปิด)", Fore.YELLOW)
-    _mg_click(device, "fixmaxgacha.bmp", timeout=3)   # หลังกด get-random25 → เผื่อมี fixmaxgacha (ไม่เจอใน 3 วิ ข้าม)
-    _mg_disk_full(device)
 
-    start = last_action = time.time()
-    clicks = 0
-    while M.bot_running and time.time() - start < C.LOOP_MAX_SECS:
-        img = M.fast_screencap(device)
-        if found is not None:
-            _mg_scan_items(device, found, img)   # สแกน ITEM ทุกเฟรม
-        if M.ImgSearchADB(img, stop_path):
-            M.log(serial, f"เจอ stop-step2 (กด ok-getstep2 ไป {clicks} ครั้ง) → cancel-step2", Fore.GREEN)
-            break
-        pts = M.ImgSearchADB(img, M.img_path("ok-getstep2.bmp", MAXGACHA_DIR))
-        if pts:
-            M.tap(device, *pts[0])
-            clicks += 1
-            last_action = time.time()
-            # เว้นจังหวะ 2 วิ หา ITEM_GET_MAP หลังกดรับของ (เจอ stop-step2 ระหว่างนั้น → ออกเลย)
+    while M.bot_running:
+        M.log(serial, "=== STEP2 ===", Fore.GREEN)
+        if not _mg_click(device, "get-random25.bmp", timeout=15):
+            M.log(serial, "ไม่เจอ get-random25 → กด fix-random25 แล้วหา get-random25 ใหม่", Fore.YELLOW)
+            _mg_click(device, "fix-random25.bmp", timeout=10)
+            if not _mg_click(device, "get-random25.bmp", timeout=15):
+                M.log(serial, "⚠️ ยังไม่เจอ get-random25 หลัง fix-random25 (หน้า step2 อาจยังไม่เปิด)", Fore.YELLOW)
+        _mg_click(device, "fixmaxgacha.bmp", timeout=3)
+        _mg_disk_full(device)
+
+        start = last_action = time.time()
+        clicks = 0
+        retries = 0
+        found_stop = False
+        while M.bot_running and time.time() - start < C.LOOP_MAX_SECS:
+            img = M.fast_screencap(device)
             if found is not None:
-                wend = time.time() + 2.0
-                while M.bot_running and time.time() < wend:
-                    wimg = M.fast_screencap(device)
-                    _mg_scan_items(device, found, wimg)
-                    if M.ImgSearchADB(wimg, stop_path):
-                        break
-                    time.sleep(0.35)
-        elif time.time() - last_action > absent:
-            # ไม่เจอ ok-getstep2/stop-step2 ครบ absent วิ → กด get-random25 ใหม่แล้ววนต่อ (ต้องเจอ stop-step2 เท่านั้นถึงจบ)
-            M.log(serial, f"ไม่เจอ ok-getstep2/stop-step2 ครบ {absent}s (กดไป {clicks} ครั้ง) → กด get-random25 ใหม่", Fore.YELLOW)
-            _mg_click(device, "get-random25.bmp", timeout=10)
-            _mg_click(device, "fixmaxgacha.bmp", timeout=3)
-            _mg_disk_full(device)
-            last_action = time.time()          # รีเซ็ต timer
-        time.sleep(0.4)
+                _mg_scan_items(device, found, img)
+            if M.ImgSearchADB(img, stop_path):
+                M.log(serial, f"เจอ stop-step2 (กด ok-getstep2 ไป {clicks} ครั้ง) → cancel-step2", Fore.GREEN)
+                found_stop = True
+                break
+            pts = M.ImgSearchADB(img, M.img_path("ok-getstep2.bmp", MAXGACHA_DIR))
+            if pts:
+                M.tap(device, *pts[0])
+                clicks += 1
+                last_action = time.time()
+                retries = 0   # เจอ ok-getstep2 → รีเซ็ตตัวนับ retry
+                if found is not None:
+                    wend = time.time() + 2.0
+                    while M.bot_running and time.time() < wend:
+                        wimg = M.fast_screencap(device)
+                        _mg_scan_items(device, found, wimg)
+                        if M.ImgSearchADB(wimg, stop_path):
+                            break
+                        time.sleep(0.35)
+            elif time.time() - last_action > absent:
+                retries += 1
+                if retries >= 5:
+                    # ค้างเกิน 5 ครั้ง → cancel แล้วเริ่ม step2 ใหม่
+                    M.log(serial, f"⚠️ retry ครบ {retries} ครั้ง → cancel แล้วเริ่ม step2 ใหม่", Fore.YELLOW)
+                    _mg_click(device, "cancel-step2v2.bmp")
+                    _mg_click(device, "cancel-step2v3.bmp")
+                    break   # ออกลูปในไปวนลูปนอก (เริ่ม step2 ใหม่)
+                M.log(serial, f"ไม่เจอ ok-getstep2/stop-step2 ครบ {absent}s (กดไป {clicks} ครั้ง, retry {retries}/5) → กด get-random25 ใหม่", Fore.YELLOW)
+                _mg_click(device, "get-random25.bmp", timeout=10)
+                _mg_click(device, "fixmaxgacha.bmp", timeout=3)
+                _mg_disk_full(device)
+                last_action = time.time()
+            time.sleep(0.4)
+
+        if found_stop:
+            break   # เจอ stop-step2 → ออกลูปนอกไป cancel
+
     for n in ("cancel-step2.bmp", "cancel-step2v1.bmp", "cancel-step2v2.bmp", "cancel-step2v3.bmp"):
         _mg_click(device, n)
 
