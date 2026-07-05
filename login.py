@@ -1007,7 +1007,7 @@ def _mg_draw_again(device):
 
 def _mg_step2(device, found=None, absent=8):
     """get-random25 → disk-full → ok-getstep2 (รัวจนเจอ stop-step2) → cancel-step2 (+v1/v2/v3)
-    ออกจากลูปเมื่อ: เจอ stop-step2 | ไม่เจอ ok-getstep2/stop-step2 ครบ absent วิ | ชน LOOP_MAX_SECS
+    ออกจากลูปเมื่อ: เจอ stop-step2 เท่านั้น (ไม่เจอ ok-getstep2 ครบ absent วิ → กด get-random25 ใหม่แล้ววนต่อ)
     ระหว่างวนสแกน ITEM_GET_MAP ทุกเฟรม + เว้นจังหวะ 2 วิ หลังกดรับของ (กันหาพลาด/ไม่จด)"""
     serial = device.serial
     stop_path = M.img_path("stop-step2.bmp", MAXGACHA_DIR)
@@ -1044,8 +1044,12 @@ def _mg_step2(device, found=None, absent=8):
                         break
                     time.sleep(0.35)
         elif time.time() - last_action > absent:
-            M.log(serial, f"ไม่เจอ ok-getstep2/stop-step2 ครบ {absent}s (กดไป {clicks} ครั้ง) → จบ step2", Fore.YELLOW)
-            break
+            # ไม่เจอ ok-getstep2/stop-step2 ครบ absent วิ → กด get-random25 ใหม่แล้ววนต่อ (ต้องเจอ stop-step2 เท่านั้นถึงจบ)
+            M.log(serial, f"ไม่เจอ ok-getstep2/stop-step2 ครบ {absent}s (กดไป {clicks} ครั้ง) → กด get-random25 ใหม่", Fore.YELLOW)
+            _mg_click(device, "get-random25.bmp", timeout=10)
+            _mg_click(device, "fixmaxgacha.bmp", timeout=3)
+            _mg_disk_full(device)
+            last_action = time.time()          # รีเซ็ต timer
         time.sleep(0.4)
     for n in ("cancel-step2.bmp", "cancel-step2v1.bmp", "cancel-step2v2.bmp", "cancel-step2v3.bmp"):
         _mg_click(device, n)
