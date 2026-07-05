@@ -392,7 +392,7 @@ EVENT_APPEAR_TIMEOUT = 3   # รอรูป event โผล่ครั้ง�
 EVENT_NAMES = ("event-back.bmp", "git-item.bmp", "fix-daliy.png", "ok-gifitem.bmp", "fixnews.bmp")
 
 EVENT_CHECKPOINT = "check-pointevent.bmp"   # รูป checkpoint ก่อนเข้าหน้า event
-EVENT_CHECKPOINT_TIMEOUT = 60               # รอ checkpoint กี่วิ (ไม่เจอ → เริ่ม event เลย)
+EVENT_CHECKPOINT_TIMEOUT = 30               # รอ checkpoint กี่วิ (ไม่เจอ → เริ่ม event เลย)
 EVENT_STOP_IMG = "stopeventloop.png"        # เจอรูปนี้ → break EVENT LOOP ทันที (ไม่ต้องครบรอบ)
 
 
@@ -738,8 +738,8 @@ def run_boxes(device):
     serial = device.serial
     M.log(serial, "=== รับของ BOX (login) ===", Fore.GREEN)
 
-    M.wait_and_click(device, "box1.bmp", post_delay=1.5)
-    M.wait_and_click(device, "box2.bmp", post_delay=1.5)
+    M.wait_and_click(device, "box1.bmp", timeout=BOX3_TIMEOUT, required=False, post_delay=1.5)
+    M.wait_and_click(device, "box2.bmp", timeout=BOX3_TIMEOUT, required=False, post_delay=1.5)
 
     # ไม่เจอ box3 ใน BOX3_TIMEOUT วิ → ข้ามไป box5 แล้วจบ step เลย
     if not M.wait_and_click(device, "box3.bmp", timeout=BOX3_TIMEOUT, required=False, post_delay=1.5):
@@ -1077,7 +1077,7 @@ def _mg_draw_again(device):
 def _mg_step2(device, found=None, absent=1):
     """get-random25 → disk-full → ok-getstep2 (รัวจนเจอ stop-step2) → cancel-step2 (+v1/v2/v3)
     ออกจากลูปเมื่อ: เจอ stop-step2 เท่านั้น (ไม่เจอ ok-getstep2 ครบ absent วิ → กด get-random25 ใหม่แล้ววนต่อ)
-    ถ้า retry เกิน 5 ครั้ง → กด cancel-step2v2/v3 แล้วจบ step2 (ไม่เริ่มใหม่)
+    ถ้า retry เกิน 3 ครั้ง → กด cancel-step2v2/v3 แล้วจบ step2 (ไม่เริ่มใหม่)
     ระหว่างวนสแกน ITEM_GET_MAP ทุกเฟรม + เว้นจังหวะ 2 วิ หลังกดรับของ (กันหาพลาด/ไม่จด)"""
     serial = device.serial
     stop_path = M.img_path("stop-step2.bmp", MAXGACHA_DIR)
@@ -1095,6 +1095,7 @@ def _mg_step2(device, found=None, absent=1):
         start = last_action = time.time()
         clicks = 0
         retries = 0
+        max_retries = 3
         found_stop = False
         while M.bot_running and time.time() - start < C.LOOP_MAX_SECS:
             img = M.fast_screencap(device)
@@ -1120,14 +1121,14 @@ def _mg_step2(device, found=None, absent=1):
                         time.sleep(0.35)
             elif time.time() - last_action > absent:
                 retries += 1
-                if retries >= 5:
-                    # ค้างเกิน 5 ครั้ง → cancel แล้วจบ step2 เลย (ไม่เริ่มใหม่)
+                if retries >= max_retries:
+                    # ค้างครบ max_retries ครั้ง → cancel แล้วจบ step2 เลย (ไม่เริ่มใหม่)
                     M.log(serial, f"⚠️ retry ครบ {retries} ครั้ง → cancel แล้วจบ step2", Fore.YELLOW)
                     _mg_click(device, "cancel-step2v2.bmp")
                     _mg_click(device, "cancel-step2v3.bmp")
                     found_stop = True   # นับว่าจบ → ออกทั้งลูปใน+นอก
                     break
-                M.log(serial, f"ไม่เจอ ok-getstep2/stop-step2 ครบ {absent}s (กดไป {clicks} ครั้ง, retry {retries}/5) → กด get-random25 ใหม่", Fore.YELLOW)
+                M.log(serial, f"ไม่เจอ ok-getstep2/stop-step2 ครบ {absent}s (กดไป {clicks} ครั้ง, retry {retries}/{max_retries}) → กด get-random25 ใหม่", Fore.YELLOW)
                 _mg_click(device, "get-random25.bmp", timeout=10)
                 _mg_click(device, "fixmaxgacha.bmp", timeout=3)
                 _mg_disk_full(device)
@@ -1170,14 +1171,14 @@ def _run_maxgacha_body(device, found):
     _mg_disk_full(device)
     _mg_click(device, "maxgacha2.bmp")
 
-    if _mg_click(device, "maxgacha3.bmp", timeout=15):
+    if _mg_click(device, "maxgacha3.bmp", timeout=5):
         _mg_click(device, "fixmaxgacha.bmp", timeout=5)   # หลังกด maxgacha3 → เผื่อมี fixmaxgacha (ไม่เจอใน 5 วิ ข้าม)
-        # เจอ maxgacha3 → วน (maxgacha-step1 + สแกน ITEM) จนไม่เจอ maxgacha3 15วิ
+        # เจอ maxgacha3 → วน (maxgacha-step1 + สแกน ITEM) จนไม่เจอ maxgacha3 5วิ
         while M.bot_running:
             _mg_scan_items_window(device, found, secs=2.0)   # เว้น 2 วิ หา ITEM ให้ชัวร์ก่อนกด
-            _mg_click(device, "maxgacha-step1.bmp", timeout=10)   # ⚠️ ยังไม่มีรูปนี้
+            _mg_click(device, "maxgacha-step1.bmp", timeout=3)   # ⚠️ ยังไม่มีรูปนี้ → timeout สั้นๆ กันเสียเวลาเปล่า
             _mg_scan_items(device, found)
-            if not _mg_click(device, "maxgacha3.bmp", timeout=15):
+            if not _mg_click(device, "maxgacha3.bmp", timeout=5):
                 break
         _mg_scan_items_window(device, found, secs=2.0)   # กวาดปิดท้ายอีกรอบกันของค้างบนจอ
         M.log(serial, "จบลูป maxgacha3 → ไป maxgacha4 ต่อ", Fore.CYAN)
