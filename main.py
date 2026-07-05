@@ -146,11 +146,52 @@ def set_process_priority():
         print(f"{Fore.YELLOW}[PERF] set priority error: {e}{Style.RESET_ALL}")
 
 
+# ── Per-device file logging ───────────────────────────────────────────
+LOG_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logs")
+os.makedirs(LOG_DIR, exist_ok=True)
+
+_log_files = {}          # serial → open file handle
+_log_files_lock = threading.Lock()
+_ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")   # ตัดสี ANSI ออกก่อนเขียนไฟล์
+
+
+def _get_log_file(serial):
+    """คืน file handle สำหรับ serial (สร้างใหม่ถ้ายังไม่มี) — thread-safe"""
+    if serial in _log_files:
+        return _log_files[serial]
+    with _log_files_lock:
+        if serial not in _log_files:
+            safe = serial.replace(".", "_").replace(":", "_")
+            path = os.path.join(LOG_DIR, f"{safe}.log")
+            _log_files[serial] = open(path, "a", encoding="utf-8", buffering=1)  # line-buffered
+        return _log_files[serial]
+
+
+def close_all_log_files():
+    """ปิด file handle ทั้งหมด (เรียกตอนจบโปรแกรม)"""
+    with _log_files_lock:
+        for f in _log_files.values():
+            try:
+                f.close()
+            except Exception:
+                pass
+        _log_files.clear()
+
+
 def log(serial, msg, color=Fore.CYAN):
+    # 1) console (เหมือนเดิม)
     try:
         print(f"{color}[{serial}] {msg}{Style.RESET_ALL}")
     except UnicodeEncodeError:
         print(f"[{serial}] {msg}".encode("ascii", "replace").decode("ascii"))
+    # 2) เขียนลงไฟล์ logs/<serial>.log (มี timestamp, ตัดสี ANSI)
+    try:
+        ts = time.strftime("%Y-%m-%d %H:%M:%S")
+        fh = _get_log_file(serial)
+        clean = _ANSI_RE.sub("", msg)
+        fh.write(f"[{ts}] {clean}\n")
+    except Exception:
+        pass
 
 
 # ═══════════════════════════════════════════════════════════════════
