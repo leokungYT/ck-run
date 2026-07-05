@@ -76,8 +76,6 @@ DEFAULTS = {
     "claim_dir": "input-id/_processing",
     "start_wait": 15,
     "shard_size": 0,   # แบ่ง output เป็นโฟลเดอร์ย่อย part-XXXX ละกี่ไฟล์ (0 = ไม่แบ่ง กองรวมใน backup-id เลย)
-    "log_dir": "logs",       # แยก log ต่อเครื่อง → logs/<serial>.log
-    "log_console": 1,        # 1 = พิมพ์ขึ้นคอนโซลด้วย (tee) | 0 = เขียนแต่ไฟล์ (คอนโซลเงียบ)
     "extra_check_pet": 0,     # find-pet: บังคับต้องเจอชื่อ extra_pet ไม่งั้นปัด → not-found (0 = ปิด)
     "extra_pet": "",          # ชื่อบังคับของ find-pet (ควรอยู่ใน config-findpet.json เช่น trader)
     "extra_check_sombut": 0,  # find-treasure: บังคับต้องเจอชื่อ extra_sombut ไม่งั้นปัด → not-found (0 = ปิด)
@@ -102,7 +100,6 @@ def load_login_config():
             for k in ("event_rounds", "config_name", "input_dir", "output_dir",
                       "backup_id_dir", "random_fail_dir", "login_failed_dir",
                       "found_dir", "not_found_dir", "failed_dir", "claim_dir", "start_wait", "shard_size",
-                      "log_dir", "log_console",
                       "extra_check_pet", "extra_pet", "extra_check_sombut", "extra_sombut"):
                 if k in loaded:
                     cfg[k] = loaded[k]
@@ -115,8 +112,6 @@ def load_login_config():
     cfg["event_rounds"] = int(cfg["event_rounds"])
     cfg["start_wait"] = int(cfg["start_wait"])
     cfg["shard_size"] = int(cfg["shard_size"])
-    cfg["log_console"] = 1 if cfg.get("log_console", 1) else 0
-    cfg["log_dir"] = str(cfg.get("log_dir", "logs")).strip() or "logs"
     cfg["extra_check_pet"] = 1 if cfg.get("extra_check_pet") else 0
     cfg["extra_pet"] = str(cfg.get("extra_pet", "")).strip()
     cfg["extra_check_sombut"] = 1 if cfg.get("extra_check_sombut") else 0
@@ -334,7 +329,7 @@ def run_maxpet(device, found):
     serial = device.serial
     M.log(serial, "=== MAX-PET (login) ===", Fore.GREEN)
 
-    M.wait_and_click(device, "pet1.bmp", post_delay=0.4)
+    M.wait_and_click(device, "pet1.bmp", post_delay=1.5)
 
     # หลังกด pet1 → swipe (279,348)→(737,334) 5 รอบ ก่อนไปหา pet2
     x1, y1, x2, y2 = PET_SWIPE
@@ -343,9 +338,9 @@ def run_maxpet(device, found):
             return
         M.log(serial, f"swipe {i+1}/{PET_SWIPE_ROUNDS} ({x1},{y1})→({x2},{y2})", Fore.CYAN)
         device.shell(f"input swipe {x1} {y1} {x2} {y2} {PET_SWIPE_MS}")
-        time.sleep(0.25)
+        time.sleep(0.5)
 
-    M.wait_and_click(device, "pet2.bmp", post_delay=0.4)
+    M.wait_and_click(device, "pet2.bmp", post_delay=1.5)
 
     start = time.time()
     while time.time() - start < C.LOOP_MAX_SECS:
@@ -379,11 +374,11 @@ def run_maxpet(device, found):
         pts3 = M.ImgSearchADB(img, M.img_path("pet3.bmp"))
         if pts3:
             M.tap(device, *pts3[0])
-            time.sleep(0.3)
+            time.sleep(0.6)
         pts4 = M.ImgSearchADB(img, M.img_path("pet4.bmp"))
         if pts4:
             M.tap(device, *pts4[0])
-            time.sleep(1.0)
+            time.sleep(3)
         time.sleep(0.3)
 
 
@@ -532,21 +527,21 @@ def run_find(device, found):
     extra_check = bool(LOGIN.get("extra_check_pet"))
     extra = str(LOGIN.get("extra_pet", "")).strip().lower()
 
-    M.wait_and_click(device, "fin1.png", folder=FIN_DIR, required=False, post_delay=0.35)
+    M.wait_and_click(device, "fin1.png", folder=FIN_DIR, required=False, post_delay=1.2)
     for i, name in enumerate(names, 1):
         if not M.bot_running:
             break
         _raise_if_login_failed(device)
         M.log(serial, f"--- find {i}/{len(names)}: {name} ---", Fore.CYAN)
-        M.wait_and_click(device, "fin2.png", folder=FIN_DIR, required=False, post_delay=0.35)
-        M.wait_and_click(device, "fin3.png", folder=FIN_DIR, required=False, post_delay=0.35)
+        M.wait_and_click(device, "fin2.png", folder=FIN_DIR, required=False, post_delay=1.0)
+        M.wait_and_click(device, "fin3.png", folder=FIN_DIR, required=False, post_delay=1.0)
         # กรอกชื่อ + Enter
         device.shell(f"input text '{name}'")
-        time.sleep(0.4)
+        time.sleep(0.8)
         device.shell("input keyevent 66")   # KEYCODE_ENTER
-        time.sleep(0.5)
+        time.sleep(1.2)
         # confirm
-        M.wait_and_click(device, "confirm.png", folder=FIN_DIR, required=False, post_delay=0.4)
+        M.wait_and_click(device, "confirm.png", folder=FIN_DIR, required=False, post_delay=1.5)
         # สแกน FIN_REGION ว่าตรงกับชื่อที่ค้นไหม
         ok, text = _fin_scan_match(device, name)
         if ok:
@@ -559,7 +554,7 @@ def run_find(device, found):
                 M.log(serial, f"extra-check: ไม่เจอ '{name}' → ปัด นับว่าไม่เจอ (ข้ามที่เหลือ)", Fore.YELLOW)
                 break
 
-    M.wait_and_click(device, "exit.png", folder=FIN_DIR, required=False, post_delay=0.35)
+    M.wait_and_click(device, "exit.png", folder=FIN_DIR, required=False, post_delay=1.0)
     hit = [n for n in names if n in found]
     M.log(serial, f"จบ find → เจอ {len(hit)}/{len(names)}: {hit}", Fore.GREEN)
 
@@ -663,7 +658,7 @@ def _treasure_match(device, img_name, timeout=3.0):
                     M.log(serial, f"treasure: เจอ ({img_name} score={score:.3f} สีตรง diff={diff:.1f})", Fore.GREEN)
                     return True
                 M.log(serial, f"treasure: เจอรูปแต่สีต่าง (score={score:.3f} diff={diff:.1f} > {TREASURE_MAX_COLOR_DIFF}) = ตัวเทา/หรี่ ไม่นับ", Fore.YELLOW)
-        time.sleep(0.2)
+        time.sleep(0.4)
     return False
 
 
@@ -691,23 +686,23 @@ def run_treasure(device, found):
     extra = str(LOGIN.get("extra_sombut", "")).strip().lower()
 
     # เข้าเมนูครั้งเดียว: fin1 → fin2
-    M.wait_and_click(device, "fin1.png", folder=TREASURE_DIR, required=False, post_delay=0.35)
-    M.wait_and_click(device, "fin2.png", folder=TREASURE_DIR, required=False, post_delay=0.35)
+    M.wait_and_click(device, "fin1.png", folder=TREASURE_DIR, required=False, post_delay=1.2)
+    M.wait_and_click(device, "fin2.png", folder=TREASURE_DIR, required=False, post_delay=1.0)
     for i, e in enumerate(entries, 1):
         if not M.bot_running:
             break
         _raise_if_login_failed(device)
         M.log(serial, f"--- treasure {i}/{len(entries)}: ค้นหา '{e['search']}' (รูป {e['img']}) ---", Fore.CYAN)
         # แต่ละรอบเริ่มที่ fin3
-        M.wait_and_click(device, "fin3.png", folder=TREASURE_DIR, required=False, post_delay=0.35)
-        M.wait_and_click(device, "fin4.png", folder=TREASURE_DIR, required=False, post_delay=0.35)
+        M.wait_and_click(device, "fin3.png", folder=TREASURE_DIR, required=False, post_delay=1.0)
+        M.wait_and_click(device, "fin4.png", folder=TREASURE_DIR, required=False, post_delay=1.0)
         # กรอกชื่อค้นหา + Enter
         device.shell(f"input text '{e['search']}'")
-        time.sleep(0.4)
+        time.sleep(0.8)
         device.shell("input keyevent 66")   # KEYCODE_ENTER
-        time.sleep(0.5)
+        time.sleep(1.2)
         # confirm
-        M.wait_and_click(device, "confirm.png", folder=TREASURE_DIR, required=False, post_delay=0.4)
+        M.wait_and_click(device, "confirm.png", folder=TREASURE_DIR, required=False, post_delay=1.5)
         # เช็ครูป item ว่า match บนจอไหม
         matched = _treasure_match(device, e["img"])
         if matched:
@@ -716,7 +711,7 @@ def run_treasure(device, found):
         else:
             M.log(serial, f"treasure ไม่เจอ: {e['search']} (รูป {e['img']} ไม่ match)", Fore.YELLOW)
         # exit ปิดกลับหน้า list ก่อนค้นตัวถัดไป
-        M.wait_and_click(device, "exit.png", folder=TREASURE_DIR, required=False, post_delay=0.35)
+        M.wait_and_click(device, "exit.png", folder=TREASURE_DIR, required=False, post_delay=1.0)
         # extra-checksombut: entry ที่บังคับต้องเจอ (match ชื่อ search หรือ name) แต่ไม่เจอ → ปัด
         if extra_check and extra and not matched and \
            (e["search"].strip().lower() == extra or e["name"].strip().lower() == extra):
@@ -724,8 +719,8 @@ def run_treasure(device, found):
             break
 
     # ออกจากเมนู treasure: out1 → out2 ก่อนจบ
-    M.wait_and_click(device, "out1.png", folder=TREASURE_DIR, required=False, post_delay=0.35)
-    M.wait_and_click(device, "out2.png", folder=TREASURE_DIR, required=False, post_delay=0.35)
+    M.wait_and_click(device, "out1.png", folder=TREASURE_DIR, required=False, post_delay=1.0)
+    M.wait_and_click(device, "out2.png", folder=TREASURE_DIR, required=False, post_delay=1.0)
     hit = sorted({e["name"] for e in entries if e["name"] in found})
     M.log(serial, f"จบ find-treasure → เจอ {len(hit)}: {hit}", Fore.GREEN)
 
@@ -743,18 +738,18 @@ def run_boxes(device):
     serial = device.serial
     M.log(serial, "=== รับของ BOX (login) ===", Fore.GREEN)
 
-    M.wait_and_click(device, "box1.bmp", timeout=BOX3_TIMEOUT, required=False, post_delay=0.4)
-    M.wait_and_click(device, "box2.bmp", timeout=BOX3_TIMEOUT, required=False, post_delay=0.4)
+    M.wait_and_click(device, "box1.bmp", timeout=BOX3_TIMEOUT, required=False, post_delay=1.5)
+    M.wait_and_click(device, "box2.bmp", timeout=BOX3_TIMEOUT, required=False, post_delay=1.5)
 
     # ไม่เจอ box3 ใน BOX3_TIMEOUT วิ → ข้ามไป box5 แล้วจบ step เลย
-    if not M.wait_and_click(device, "box3.bmp", timeout=BOX3_TIMEOUT, required=False, post_delay=0.4):
+    if not M.wait_and_click(device, "box3.bmp", timeout=BOX3_TIMEOUT, required=False, post_delay=1.5):
         M.log(serial, f"ไม่เจอ box3 ครบ {BOX3_TIMEOUT} วิ → ข้ามไป box5 แล้วจบ box", Fore.YELLOW)
-        M.wait_and_click(device, "box5.bmp", post_delay=0.4)
+        M.wait_and_click(device, "box5.bmp", post_delay=1.5)
         return
 
     # เจอ box3 → box4 → box5 ตามปกติ
     for i in range(4, 6):
-        M.wait_and_click(device, f"box{i}.bmp", post_delay=0.4)
+        M.wait_and_click(device, f"box{i}.bmp", post_delay=1.5)
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -770,7 +765,6 @@ def run_boxes(device):
 #  ⚠️ ต้องเพิ่มรูป maxgacha-step1.bmp + stop-ruby.bmp (ยังไม่มี — ตอนนี้จะข้าม/พึ่ง safety cap)
 # ═══════════════════════════════════════════════════════════════════════
 MAXGACHA_DIR = "img/max-gacha"
-CANCEL_TIMEOUT = 3   # ปุ่ม cancel/dialog dismiss — โผล่ไวหรือไม่โผล่เลย ไม่ต้องรอ 10 วิ (กันรอเปล่า)
 _mg_diskfull_locks = {}                # per-device lock (serial->Lock): กันเคลียร์ disk-full ซ้อน watchdog vs main thread 'เครื่องเดียวกัน'
 _mg_fixspace_locks = {}                # per-device lock: กันเคลียร์ fix-space ซ้อน watchdog vs main thread
 _mg_locks_guard = threading.Lock()     # กัน race ตอนสร้าง lock ใหม่ใน dict
@@ -785,13 +779,13 @@ def _mg_dev_lock(store, serial):
         return lk
 
 
-def _mg_click(device, name, timeout=C.PLAY_STEP_TIMEOUT, post_delay=0.35):
+def _mg_click(device, name, timeout=C.PLAY_STEP_TIMEOUT, post_delay=1.2):
     """คลิกรูปในโฟลเดอร์ max-gacha (required=False → ไม่เจอก็ข้าม)"""
     return M.wait_and_click(device, name, timeout=timeout, required=False,
                             post_delay=post_delay, folder=MAXGACHA_DIR)
 
 
-def _mg_click_when_held(device, name, hold=5, timeout=30, post_delay=0.35):
+def _mg_click_when_held(device, name, hold=5, timeout=30, post_delay=1.2):
     """รอจน name ปรากฏ 'ค้างต่อเนื่อง' ครบ hold วิ แล้วค่อยกด (กันกดตอนหน้ายังโหลด/ยังไม่นิ่ง)
     ถ้าหายไประหว่างนับ → รีเซ็ตตัวนับ | ไม่เจอเลยจนครบ timeout → ข้าม (คืน False)"""
     path = M.img_path(name, MAXGACHA_DIR)
@@ -809,7 +803,7 @@ def _mg_click_when_held(device, name, hold=5, timeout=30, post_delay=0.35):
                 return True
         else:
             seen_since = None   # หายไป → เริ่มนับใหม่
-        time.sleep(0.2)
+        time.sleep(0.4)
     return False
 
 
@@ -835,7 +829,7 @@ FIX_SPACE_THRESHOLD = 0.72
 
 
 def _mg_click_until_gone(device, name, absent=1.2, first_wait=2.5, max_secs=15,
-                         post_delay=0.3, threshold=None):
+                         post_delay=0.6, threshold=None):
     """กด name (รูปใน img/ default) 'รัวๆ จนปุ่มนั้นหาย' ติดต่อกัน absent วิ → คืน True
     ไม่เจอเลยใน first_wait วิแรก → คืน False (ข้ามไปปุ่มถัดไป) | ชน max_secs → หยุด"""
     path = M.img_path(name)
@@ -884,14 +878,14 @@ def _mg_fix_space(device, blocking=True):
         _wait_next = time.time()
         _prev_seen3 = None
         _found3 = False
-        while M.bot_running and time.time() - _wait_next < 15:
+        while M.bot_running and time.time() - _wait_next < 30:
             img = M.fast_screencap(device)
             pts = M.ImgSearchADB(img, path3, FIX_SPACE_THRESHOLD)
             if pts:
                 M.tap(device, *pts[0])
                 M.log(device.serial, f"  fix-space3: กดแล้ว ที่ {pts[0]}", Fore.CYAN)
                 _found3 = True
-                time.sleep(0.3)
+                time.sleep(0.6)
                 break
             # ถ้ารูปเดิม (fix-space2new) ยังค้างอยู่เกิน 5วิ → ลองกดมัน
             prev_pts = M.ImgSearchADB(img, prev3, FIX_SPACE_THRESHOLD)
@@ -902,11 +896,11 @@ def _mg_fix_space(device, blocking=True):
                     M.tap(device, *prev_pts[0])
                     M.log(device.serial, "  fix-space3: รูปเดิม (fix-space2new) ค้างเกิน 5s → ลองกดรูปเดิม", Fore.YELLOW)
                     _prev_seen3 = time.time()   # รีเซ็ตตัวนับ
-                    time.sleep(0.3)
+                    time.sleep(0.6)
                     continue
             else:
                 _prev_seen3 = None
-            time.sleep(0.2)
+            time.sleep(0.4)
         if not _found3:
             M.log(device.serial, "  fix-space3: ไม่เจอ (ข้าม)", Fore.CYAN)
 
@@ -918,14 +912,14 @@ def _mg_fix_space(device, blocking=True):
             _wait_start = time.time()
             _prev_seen = None
             _found_i = False
-            while M.bot_running and time.time() - _wait_start < 15:
+            while M.bot_running and time.time() - _wait_start < 30:
                 img = M.fast_screencap(device)
                 pts = M.ImgSearchADB(img, p, FIX_SPACE_THRESHOLD)
                 if pts:
                     M.tap(device, *pts[0])
                     M.log(device.serial, f"  fix-space{i}: กดแล้ว ที่ {pts[0]}", Fore.CYAN)
                     _found_i = True
-                    time.sleep(0.3)
+                    time.sleep(0.6)
                     break
                 # ถ้ารูปก่อนหน้ายังค้างอยู่เกิน 5วิ → ลองกดมัน
                 prev_pts = M.ImgSearchADB(img, prev_p, FIX_SPACE_THRESHOLD)
@@ -936,11 +930,11 @@ def _mg_fix_space(device, blocking=True):
                         M.tap(device, *prev_pts[0])
                         M.log(device.serial, f"  fix-space{i}: รูปเดิม ({prev_names[i]}) ค้างเกิน 5s → ลองกดรูปเดิม", Fore.YELLOW)
                         _prev_seen = time.time()   # รีเซ็ตตัวนับ
-                        time.sleep(0.3)
+                        time.sleep(0.6)
                         continue
                 else:
                     _prev_seen = None
-                time.sleep(0.2)
+                time.sleep(0.4)
             if not _found_i:
                 M.log(device.serial, f"  fix-space{i}: ไม่เจอ (ข้าม)", Fore.CYAN)
 
@@ -1008,11 +1002,11 @@ def _mg_popup_watchdog(device, stop_event):
                 fixs_seen_since = time.time()
             elif time.time() - fixs_seen_since >= 3:
                 M.log(serial, "🛑 watchdog เจอ fixsumting ค้างครบ 3วิ → กด fixsumting1", Fore.YELLOW)
-                M.wait_and_click(device, "fixsumting1.png", timeout=5, required=False, post_delay=0.35)
+                M.wait_and_click(device, "fixsumting1.png", timeout=5, required=False, post_delay=1.2)
                 fixs_seen_since = None
         else:
             fixs_seen_since = None   # หายไป → เริ่มนับใหม่
-        time.sleep(0.25)
+        time.sleep(0.5)
 
 
 def _mg_scan_items(device, found, img=None):
@@ -1029,7 +1023,7 @@ def _mg_scan_items(device, found, img=None):
             M.log(device.serial, f"⭐ maxgacha เจอ: {name} ({fname})", Fore.GREEN)
 
 
-def _mg_scan_items_window(device, found, secs=1.0, interval=0.2):
+def _mg_scan_items_window(device, found, secs=2.0, interval=0.35):
     """เว้นช่วง secs วิ แล้วสแกน ITEM_GET_MAP ต่อเนื่องหลายเฟรม (กัน popup ขึ้นแวบเดียวแล้วหาพลาด)
     → จับให้ชัวร์ที่สุดในการจดชื่อของที่สุ่มได้"""
     end = time.time() + secs
@@ -1050,7 +1044,7 @@ def _mg_spam_until_gone(device, name, absent=5, found=None):
         if pts:
             M.tap(device, *pts[0])
             last_seen = time.time()
-        time.sleep(0.2)
+        time.sleep(0.4)
 
 
 def _mg_draw_again(device):
@@ -1063,14 +1057,14 @@ def _mg_draw_again(device):
         # เจอ stop-step2 → cancel-step2 → cancel-step2v1 → break ออกไป get-random25 (step2) เลย
         if M.ImgSearchADB(img, M.img_path("stop-step2.bmp", MAXGACHA_DIR)):
             M.log(serial, "เจอ stop-step2 → cancel-step2 → cancel-step2v1 → ไป get-random25", Fore.GREEN)
-            _mg_click(device, "cancel-step2.bmp", timeout=CANCEL_TIMEOUT)
-            _mg_click(device, "cancel-step2v1.bmp", timeout=CANCEL_TIMEOUT)
+            _mg_click(device, "cancel-step2.bmp")
+            _mg_click(device, "cancel-step2v1.bmp")
             return
         # เจอ stop-ruby → cancel1 → cancel2
         if M.ImgSearchADB(img, M.img_path("stop-ruby.bmp", MAXGACHA_DIR)):
             M.log(serial, "เจอ stop-ruby → cancel1 → cancel2", Fore.GREEN)
-            _mg_click(device, "cancel1.bmp", timeout=CANCEL_TIMEOUT)
-            _mg_click(device, "cancel2.bmp", timeout=CANCEL_TIMEOUT)
+            _mg_click(device, "cancel1.bmp")
+            _mg_click(device, "cancel2.bmp")
             return
         if _mg_click(device, "draw-agin.bmp", timeout=5):
             _mg_disk_full(device)
@@ -1081,7 +1075,7 @@ def _mg_draw_again(device):
 
 
 def _mg_step2(device, found=None, absent=1):
-    """get-random25 → ok-getstep2 (รัวจนเจอ stop-step2) → cancel-step2 (+v1/v2/v3)  [disk-full = watchdog เคลียร์]
+    """get-random25 → disk-full → ok-getstep2 (รัวจนเจอ stop-step2) → cancel-step2 (+v1/v2/v3)
     ออกจากลูปเมื่อ: เจอ stop-step2 เท่านั้น (ไม่เจอ ok-getstep2 ครบ absent วิ → กด get-random25 ใหม่แล้ววนต่อ)
     ถ้า retry เกิน 3 ครั้ง → กด cancel-step2v2/v3 แล้วจบ step2 (ไม่เริ่มใหม่)
     ระหว่างวนสแกน ITEM_GET_MAP ทุกเฟรม + เว้นจังหวะ 2 วิ หลังกดรับของ (กันหาพลาด/ไม่จด)"""
@@ -1090,13 +1084,13 @@ def _mg_step2(device, found=None, absent=1):
 
     while M.bot_running:
         M.log(serial, "=== STEP2 ===", Fore.GREEN)
-        if not _mg_click(device, "get-random25.bmp", timeout=8):
+        if not _mg_click(device, "get-random25.bmp", timeout=15):
             M.log(serial, "ไม่เจอ get-random25 → กด fix-random25 แล้วหา get-random25 ใหม่", Fore.YELLOW)
-            _mg_click(device, "fix-random25.bmp", timeout=5)
-            if not _mg_click(device, "get-random25.bmp", timeout=8):
+            _mg_click(device, "fix-random25.bmp", timeout=10)
+            if not _mg_click(device, "get-random25.bmp", timeout=15):
                 M.log(serial, "⚠️ ยังไม่เจอ get-random25 หลัง fix-random25 (หน้า step2 อาจยังไม่เปิด)", Fore.YELLOW)
-        _mg_click(device, "fixmaxgacha.bmp", timeout=2)
-        # disk-full ให้ watchdog เคลียร์ให้ (ไม่ต้องรอ disk-full1 5วิ ทุกรอบ)
+        _mg_click(device, "fixmaxgacha.bmp", timeout=3)
+        _mg_disk_full(device)
 
         start = last_action = time.time()
         clicks = 0
@@ -1118,33 +1112,34 @@ def _mg_step2(device, found=None, absent=1):
                 last_action = time.time()
                 retries = 0   # เจอ ok-getstep2 → รีเซ็ตตัวนับ retry
                 if found is not None:
-                    wend = time.time() + 1.0
+                    wend = time.time() + 2.0
                     while M.bot_running and time.time() < wend:
                         wimg = M.fast_screencap(device)
                         _mg_scan_items(device, found, wimg)
                         if M.ImgSearchADB(wimg, stop_path):
                             break
-                        time.sleep(0.2)
+                        time.sleep(0.35)
             elif time.time() - last_action > absent:
                 retries += 1
                 if retries >= max_retries:
                     # ค้างครบ max_retries ครั้ง → cancel แล้วจบ step2 เลย (ไม่เริ่มใหม่)
                     M.log(serial, f"⚠️ retry ครบ {retries} ครั้ง → cancel แล้วจบ step2", Fore.YELLOW)
-                    _mg_click(device, "cancel-step2v2.bmp", timeout=CANCEL_TIMEOUT)
-                    _mg_click(device, "cancel-step2v3.bmp", timeout=CANCEL_TIMEOUT)
+                    _mg_click(device, "cancel-step2v2.bmp")
+                    _mg_click(device, "cancel-step2v3.bmp")
                     found_stop = True   # นับว่าจบ → ออกทั้งลูปใน+นอก
                     break
                 M.log(serial, f"ไม่เจอ ok-getstep2/stop-step2 ครบ {absent}s (กดไป {clicks} ครั้ง, retry {retries}/{max_retries}) → กด get-random25 ใหม่", Fore.YELLOW)
-                _mg_click(device, "get-random25.bmp", timeout=5)
-                _mg_click(device, "fixmaxgacha.bmp", timeout=1)
+                _mg_click(device, "get-random25.bmp", timeout=10)
+                _mg_click(device, "fixmaxgacha.bmp", timeout=3)
+                _mg_disk_full(device)
                 last_action = time.time()
-            time.sleep(0.2)
+            time.sleep(0.4)
 
         if found_stop:
             break   # เจอ stop-step2 → ออกลูปนอกไป cancel
 
     for n in ("cancel-step2.bmp", "cancel-step2v1.bmp", "cancel-step2v2.bmp", "cancel-step2v3.bmp"):
-        _mg_click(device, n, timeout=CANCEL_TIMEOUT)
+        _mg_click(device, n)
 
 
 def _mg_stop_step2_jump(device, timeout=3):
@@ -1154,8 +1149,8 @@ def _mg_stop_step2_jump(device, timeout=3):
     while M.bot_running and time.time() - start < timeout:
         if M.ImgSearchADB(M.fast_screencap(device), path):
             M.log(device.serial, "เจอ stop-step2 → cancel-step2 → cancel-step2v1 → ไป get-random25", Fore.GREEN)
-            _mg_click(device, "cancel-step2.bmp", timeout=CANCEL_TIMEOUT)
-            _mg_click(device, "cancel-step2v1.bmp", timeout=CANCEL_TIMEOUT)
+            _mg_click(device, "cancel-step2.bmp")
+            _mg_click(device, "cancel-step2v1.bmp")
             return True
         time.sleep(0.3)
     return False
@@ -1180,56 +1175,33 @@ def _run_maxgacha_body(device, found):
         _mg_click(device, "fixmaxgacha.bmp", timeout=5)   # หลังกด maxgacha3 → เผื่อมี fixmaxgacha (ไม่เจอใน 5 วิ ข้าม)
         # เจอ maxgacha3 → วน (maxgacha-step1 + สแกน ITEM) จนไม่เจอ maxgacha3 5วิ
         while M.bot_running:
-            _mg_scan_items_window(device, found, secs=1.0)   # เว้น 2 วิ หา ITEM ให้ชัวร์ก่อนกด
+            _mg_scan_items_window(device, found, secs=2.0)   # เว้น 2 วิ หา ITEM ให้ชัวร์ก่อนกด
             _mg_click(device, "maxgacha-step1.bmp", timeout=3)   # ⚠️ ยังไม่มีรูปนี้ → timeout สั้นๆ กันเสียเวลาเปล่า
             _mg_scan_items(device, found)
             if not _mg_click(device, "maxgacha3.bmp", timeout=5):
                 break
-        _mg_scan_items_window(device, found, secs=1.0)   # กวาดปิดท้ายอีกรอบกันของค้างบนจอ
+        _mg_scan_items_window(device, found, secs=2.0)   # กวาดปิดท้ายอีกรอบกันของค้างบนจอ
         M.log(serial, "จบลูป maxgacha3 → ไป maxgacha4 ต่อ", Fore.CYAN)
     else:
         M.log(serial, "ไม่เจอ maxgacha3 → ไป maxgacha4 เลย", Fore.YELLOW)
 
     # วนลูป maxgacha4 → fix-space → disk-full → maxgacha5 → draw-again จนกว่าจะเจอ stop-step2
-    _stopmaxloop_path = M.img_path("stopmaxloop.bmp")
-
-    def _check_stopmaxloop():
-        """เจอ stopmaxloop → log แล้วคืน True (ให้ break ออกลูป maxgacha4 ทันที)"""
-        if M.ImgSearchADB(M.fast_screencap(device), _stopmaxloop_path):
-            M.log(serial, "เจอ stopmaxloop → หยุด maxgacha4 loop (ครบ 5/5) → ไป step2", Fore.YELLOW)
-            return True
-        return False
-
     round_num = 0
     while M.bot_running and round_num < 5:
         round_num += 1
         M.log(serial, f"--- maxgacha4 loop รอบ {round_num}/5 ---", Fore.CYAN)
 
-        # เจอ stopmaxloop → หยุด loop ทันที (นับว่าครบ 5/5) → ไป step2
-        if _check_stopmaxloop():
-            break
-
         if not _mg_click(device, "maxgacha4.bmp", timeout=8):
             _mg_click(device, "maxgacha4fix.bmp", timeout=8)  # ลดราคา → ใช้รูปอีกแบบ
         # หลังกด maxgacha4 → หา fix-space1 5วิ ถ้าเจอ → เคลียร์ fix-space2→6 ให้จบก่อน ค่อยทำงานตามปกติ
         _mg_fix_space_check(device, timeout=5)
-        if _check_stopmaxloop():
-            break
         # เจอ stop-step2 → ออกลูปไป step2 เลย
         if _mg_stop_step2_jump(device):
             break
-        if _check_stopmaxloop():
-            break
         # #step-ruby: disk-full (5วิ ไม่เจอข้าม) → maxgacha5 รัวจนไม่เจอ 5วิ + สแกน ITEM_GET_MAP
         _mg_disk_full(device)
-        if _check_stopmaxloop():
-            break
         _mg_spam_until_gone(device, "maxgacha5.bmp", absent=5, found=found)
-        if _check_stopmaxloop():
-            break
         _mg_draw_again(device)
-        if _check_stopmaxloop():
-            break
 
     # เจอ stop-step2 แล้ว → ไป step2
     _mg_step2(device, found)
@@ -1620,56 +1592,6 @@ def worker(serial, input_dir):
 #  multiprocess: 1 process / 1 เครื่อง — ลื่นสุดสำหรับหลายจอ (เลี่ยง GIL)
 #  ระบบ claim ไฟล์ (lock) ทำงานข้าม process ได้อยู่แล้ว → พฤติกรรมเหมือนเดิม
 # ═══════════════════════════════════════════════════════════════════════
-# ── แยก log ต่อเครื่อง → logs/<serial>.log ────────────────────────────────
-_ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")   # ตัด escape สี ANSI ออกก่อนเขียนไฟล์ (ให้ไฟล์อ่านง่าย)
-
-
-class _TeeLog:
-    """เขียนออกทั้งไฟล์ (ตัดสี ANSI) และคอนโซลเดิม (คงสีไว้ ถ้า console ไม่ None)"""
-    def __init__(self, logfile, console):
-        self.logfile = logfile
-        self.console = console
-
-    def write(self, s):
-        if self.console is not None:
-            try:
-                self.console.write(s)
-            except Exception:
-                pass
-        try:
-            self.logfile.write(_ANSI_RE.sub("", s))
-        except Exception:
-            pass
-
-    def flush(self):
-        for st in (self.console, self.logfile):
-            if st is not None:
-                try:
-                    st.flush()
-                except Exception:
-                    pass
-
-
-def _setup_device_log(serial):
-    """redirect stdout/stderr ของ process นี้ → logs/<serial>.log (จับ M.log/print/traceback ครบ)
-    ตัดสี ANSI ในไฟล์ + tee ขึ้นคอนโซลด้วยถ้า log_console=1. คืน path ของไฟล์ log"""
-    log_dir = LOGIN.get("log_dir", "logs")
-    try:
-        os.makedirs(log_dir, exist_ok=True)
-        safe = serial.replace(".", "_").replace(":", "_")
-        logpath = os.path.join(log_dir, f"{safe}.txt")   # ไฟล์ text แยกต่อเครื่อง (debug ง่าย)
-        logf = open(logpath, "a", encoding="utf-8", buffering=1)   # line-buffered → tail real-time ได้
-        logf.write(f"\n===== START {serial} @ {time.strftime('%Y-%m-%d %H:%M:%S')} =====\n")
-        console = sys.stdout if LOGIN.get("log_console", 1) else None
-        tee = _TeeLog(logf, console)
-        sys.stdout = tee
-        sys.stderr = tee
-        return logpath
-    except Exception as e:
-        print(f"{Fore.YELLOW}[LOG] ตั้ง log ต่อเครื่องไม่ได้: {e}{Style.RESET_ALL}")
-        return None
-
-
 def _stop_watcher(stop_event):
     """thread เล็กๆ ในแต่ละ process: parent สั่ง stop → ตั้ง M.bot_running=False
     (ลูปเดิมที่เช็ค bot_running จะหยุดเองหลังจบบัญชีปัจจุบัน)"""
@@ -1681,9 +1603,6 @@ def device_worker(serial, index, input_dir, stop_event, result_q):
     """entry ของแต่ละ process — ตั้งค่า ADB/root/priority ของตัวเอง แล้ววนทำงาน"""
     signal.signal(signal.SIGINT, signal.SIG_IGN)   # ปล่อยให้ parent จัดการ Ctrl+C (ผ่าน stop_event)
     load_login_config()
-    logpath = _setup_device_log(serial)            # แยก log ต่อเครื่อง → logs/<serial>.txt
-    if logpath:
-        M.log(serial, f"เขียน log ที่: {logpath}", Fore.CYAN)
     M.find_adb_executable()
     M.set_process_priority()                       # BELOW_NORMAL → สละ CPU ให้ UI ลื่น
     M.MUMU_MANAGER_PATH = M.find_mumu_manager() or ""
@@ -1746,8 +1665,6 @@ def main():
     dev_idx = [(s, M.SERIAL_TO_INDEX.get(s, C.MUMU_INDEX)) for s in devices]
     print(f"{Fore.GREEN}[OK] เจอ {len(devices)} device: {devices} | รอทำ ~{len(pending)} บัญชี "
           f"(multiprocess แยกจอ){Style.RESET_ALL}")
-    print(f"{Fore.CYAN}[LOG] แยก log ต่อเครื่องที่ {LOGIN['log_dir']}/<serial>.txt "
-          f"(log_console={LOGIN['log_console']}){Style.RESET_ALL}")
 
     stop_event = mp.Event()
     result_q = mp.Queue()
