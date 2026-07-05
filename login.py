@@ -1066,7 +1066,7 @@ def _mg_draw_again(device):
     M.log(serial, "จบ draw-agin loop", Fore.CYAN)
 
 
-def _mg_step2(device, found=None, absent=3):
+def _mg_step2(device, found=None, absent=1):
     """get-random25 → disk-full → ok-getstep2 (รัวจนเจอ stop-step2) → cancel-step2 (+v1/v2/v3)
     ออกจากลูปเมื่อ: เจอ stop-step2 เท่านั้น (ไม่เจอ ok-getstep2 ครบ absent วิ → กด get-random25 ใหม่แล้ววนต่อ)
     ถ้า retry เกิน 5 ครั้ง → กด cancel-step2v2/v3 แล้วจบ step2 (ไม่เริ่มใหม่)
