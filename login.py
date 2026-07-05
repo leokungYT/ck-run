@@ -1173,12 +1173,15 @@ def _mg_step2(device, found=None, absent=1):
             elif time.time() - last_action > absent:
                 retries += 1
                 if retries >= max_retries:
-                    # ค้างครบ max_retries ครั้ง → cancel แล้วจบ step2 เลย (ไม่เริ่มใหม่)
-                    M.log(serial, f"⚠️ retry ครบ {retries} ครั้ง → cancel แล้วจบ step2", Fore.YELLOW)
+                    # ค้างครบ max_retries ครั้ง → กด cancel-step2v2/v3 แล้วลองใหม่อีก 3 ครั้ง
+                    M.log(serial, f"⚠️ retry ครบ {retries} ครั้ง → กด cancel-step2v2/v3 แล้วลองหาต่ออีก {max_retries} ครั้ง", Fore.YELLOW)
                     _mg_click(device, "cancel-step2v2.bmp", timeout=CANCEL_TIMEOUT)
                     _mg_click(device, "cancel-step2v3.bmp", timeout=CANCEL_TIMEOUT)
-                    found_stop = True   # นับว่าจบ → ออกทั้งลูปใน+นอก
-                    break
+                    retries = 0
+                    last_action = time.time()
+                    _mg_click(device, "get-random25.bmp", timeout=5)
+                    _mg_click(device, "fixmaxgacha.bmp", timeout=1)
+                    continue
                 M.log(serial, f"ไม่เจอ ok-getstep2/stop-step2 ครบ {absent}s (กดไป {clicks} ครั้ง, retry {retries}/{max_retries}) → กด get-random25 ใหม่", Fore.YELLOW)
                 _mg_click(device, "get-random25.bmp", timeout=5)
                 _mg_click(device, "fixmaxgacha.bmp", timeout=1)
