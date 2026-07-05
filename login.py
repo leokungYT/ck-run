@@ -823,6 +823,8 @@ def _mg_disk_full(device, timeout=5):
         if _mg_click(device, "disk-full1.bmp", timeout=timeout):
             _mg_click(device, "disk-full2.bmp", timeout=10)
             _mg_click(device, "disk-full3.bmp", timeout=10)
+            # แก้ หลังจากกดdisk-full3 ให้มันกด draw-agin.bmpอีกรอบ หา 10sว่าเจอไหมไม่เจอtimeout
+            _mg_click(device, "draw-agin.bmp", timeout=10)
             _mg_click_when_held(device, "fixdisk1.bmp", hold=10, timeout=40)
             _mg_click(device, "fixdisk2.bmp", timeout=10)
     finally:
