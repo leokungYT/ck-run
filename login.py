@@ -967,12 +967,14 @@ def _mg_fix_space_check(device, timeout=5):
 def _mg_popup_watchdog(device, stop_event):
     """thread เฝ้า popup 'ตลอดเวลา ทุก step' (รันระดับ process_account) แล้วให้ flow หลักทำงานต่อ:
       - fix-space1 (Not enough space!) → อันดับแรกสุด เจอปุ๊บเคลียร์ fix-space2→6 ก่อนเลย
+      - fix-crytalshop1 → กด fix-crytalshop2 ทันที
       - disk-full1 กลางจอ → บังคับเคลียร์ disk-full1→disk-full3→fixdisk ทันที
       - fixsumting ค้างต่อเนื่องครบ 3วิ → กด fixsumting1 (รูปอยู่ใน img/)"""
     serial = device.serial
     disk_path = M.img_path("disk-full1.bmp", MAXGACHA_DIR)
     fixs_path = M.img_path("fixsumting.png")     # อยู่ใน img/ (default folder)
     space_path = M.img_path("fix-space1.png")    # อยู่ใน img/ (default folder)
+    crytal_path = M.img_path("fix-crytalshop1.bmp")   # อยู่ใน img/ (default folder)
     fixs_seen_since = None
     while M.bot_running and not stop_event.is_set():
         img = M.fast_screencap(device)
@@ -982,13 +984,19 @@ def _mg_popup_watchdog(device, stop_event):
             _mg_fix_space(device, blocking=False)   # main thread กำลังเคลียร์อยู่ → ข้าม (กันกดซ้อน)
             fixs_seen_since = None
             continue
-        # 2) disk-full → บังคับเคลียร์ทันที
+        # 2) fix-crytalshop1 → กด fix-crytalshop2 ทันที แล้วทำงานตามปกติต่อ
+        if M.ImgSearchADB(img, crytal_path):
+            M.log(serial, "🛑 watchdog เจอ fix-crytalshop1 → กด fix-crytalshop2", Fore.YELLOW)
+            _mg_click_until_gone(device, "fix-crytalshop2.bmp")
+            fixs_seen_since = None
+            continue
+        # 3) disk-full → บังคับเคลียร์ทันที
         if M.ImgSearchADB(img, disk_path):
             M.log(serial, "🛑 watchdog เจอ disk-full → บังคับเคลียร์ก่อน", Fore.YELLOW)
             _mg_disk_full(device, timeout=3)
             fixs_seen_since = None
             continue
-        # 3) fixsumting ค้างครบ 3วิ → กด fixsumting1
+        # 4) fixsumting ค้างครบ 3วิ → กด fixsumting1
         if M.ImgSearchADB(img, fixs_path):
             if fixs_seen_since is None:
                 fixs_seen_since = time.time()
