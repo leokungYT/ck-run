@@ -872,12 +872,26 @@ def _mg_fix_space(device, blocking=True):
         n = _mg_click_until_gone(device, "fix-space2new.bmp", threshold=FIX_SPACE_THRESHOLD)
         M.log(device.serial, f"  fix-space2new: {'กดแล้ว' if n else 'ไม่เจอ (ข้าม)'}", Fore.CYAN)
 
-        # 3) fix-space3→5 (กดจนหาย)
-        for i in range(3, 6):
-            n = _mg_click_until_gone(device, f"fix-space{i}.png", threshold=FIX_SPACE_THRESHOLD)
-            M.log(device.serial, f"  fix-space{i}: {'กดแล้ว' if n else 'ไม่เจอ (ข้าม)'}", Fore.CYAN)
+        # 3) fix-space3 (กดแค่รอบเดียว)
+        path3 = M.img_path("fix-space3.png")
+        pts = M.ImgSearchADB(M.fast_screencap(device), path3, FIX_SPACE_THRESHOLD)
+        if pts:
+            M.tap(device, *pts[0])
+            M.log(device.serial, f"  fix-space3: กดแล้ว (รอบเดียว) ที่ {pts[0]}", Fore.CYAN)
+        else:
+            M.log(device.serial, "  fix-space3: ไม่เจอ (ข้าม)", Fore.CYAN)
 
-        # 4) fix-space6 (กดแค่รอบเดียว)
+        # 4) fix-space4→5 (กดแค่รอบเดียว)
+        for i in range(4, 6):
+            p = M.img_path(f"fix-space{i}.png")
+            pts = M.ImgSearchADB(M.fast_screencap(device), p, FIX_SPACE_THRESHOLD)
+            if pts:
+                M.tap(device, *pts[0])
+                M.log(device.serial, f"  fix-space{i}: กดแล้ว (รอบเดียว) ที่ {pts[0]}", Fore.CYAN)
+            else:
+                M.log(device.serial, f"  fix-space{i}: ไม่เจอ (ข้าม)", Fore.CYAN)
+
+        # 5) fix-space6 (กดแค่รอบเดียว)
         path6 = M.img_path("fix-space6.png")
         pts = M.ImgSearchADB(M.fast_screencap(device), path6, FIX_SPACE_THRESHOLD)
         if pts:
