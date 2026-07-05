@@ -757,7 +757,8 @@ def run_boxes(device):
 #  ลำดับ:
 #   maxgacha1 → disk-full → maxgacha2
 #   → maxgacha3 (15วิ)?  เจอ  : วน (maxgacha-step1 + สแกน ITEM) จนไม่เจอ maxgacha3 15วิ
-#                         ไม่เจอ: maxgacha4 → disk-full → maxgacha5 (รัวจนหาย 5วิ)+สแกน ITEM  [#step-ruby]
+#                         ไม่เจอ: maxgacha4 → (หา fix-space1 5วิ เจอ→เคลียร์ fix-space2→6 ก่อน)
+#                                → disk-full → maxgacha5 (รัวจนหาย 5วิ)+สแกน ITEM  [#step-ruby]
 #   → draw-agin loop: draw-agin → disk-full → ok-get (รัวจนหาย 5วิ) วนจนเจอ stop-ruby → cancel1 → cancel2
 #   → step2: get-random25 → disk-full → ok-getstep2 (รัวจนเจอ stop-step2) → cancel-step2 (+v1/v2/v3)
 #  จดชื่อ ITEM_GET_MAP ที่ math ได้ลง found (เอาไปตั้งชื่อไฟล์ตอน export)
@@ -765,6 +766,7 @@ def run_boxes(device):
 # ═══════════════════════════════════════════════════════════════════════
 MAXGACHA_DIR = "img/max-gacha"
 _mg_diskfull_locks = {}                # per-device lock (serial->Lock): กันเคลียร์ disk-full ซ้อน watchdog vs main thread 'เครื่องเดียวกัน'
+_mg_fixspace_locks = {}                # per-device lock: กันเคลียร์ fix-space ซ้อน watchdog vs main thread
 _mg_locks_guard = threading.Lock()     # กัน race ตอนสร้าง lock ใหม่ใน dict
 
 
@@ -851,14 +853,36 @@ def _mg_click_until_gone(device, name, absent=1.2, first_wait=2.5, max_secs=15,
     return last_seen is not None
 
 
-def _mg_fix_space(device):
-    """watchdog เจอ fix-space1 (ข้อความ "Not enough space!") → เคลียร์ทีละปุ่ม
-    'กดจนปุ่มนั้นหาย' ค่อยไปปุ่มถัดไป: fix-space2(Confirm)→3(Expand)→4(Confirm)→5(Confirm)→6(X)
+def _mg_fix_space(device, blocking=True):
+    """เคลียร์ dialog "Not enough space!" ทีละปุ่ม 'กดจนปุ่มนั้นหาย' ค่อยไปปุ่มถัดไป:
+    fix-space2(Confirm)→3(Expand)→4(Confirm)→5(Confirm)→6(X)
     ⚠️ fix-space1 เป็นแค่ 'ข้อความ' ไว้ detect ไม่ใช่ปุ่ม → เริ่มกดจริงที่ fix-space2
-    (เรียกจาก watchdog thread เดียวต่อเครื่อง → ไม่ต้องใช้ lock)"""
-    for i in range(2, 7):
-        n = _mg_click_until_gone(device, f"fix-space{i}.png", threshold=FIX_SPACE_THRESHOLD)
-        M.log(device.serial, f"  fix-space{i}: {'กดแล้ว' if n else 'ไม่เจอ (ข้าม)'}", Fore.CYAN)
+    ใช้ lock ต่อเครื่อง (เรียกได้ทั้ง main thread หลัง maxgacha4 และ watchdog):
+      blocking=True  → รอจนอีกฝั่งเคลียร์เสร็จ (main thread ต้องรอให้จบก่อนไปต่อ)
+      blocking=False → ถ้าอีกฝั่งกำลังเคลียร์อยู่ก็ข้าม (watchdog กันกดซ้อน)"""
+    lock = _mg_dev_lock(_mg_fixspace_locks, device.serial)
+    if not lock.acquire(blocking=blocking):
+        return
+    try:
+        for i in range(2, 7):
+            n = _mg_click_until_gone(device, f"fix-space{i}.png", threshold=FIX_SPACE_THRESHOLD)
+            M.log(device.serial, f"  fix-space{i}: {'กดแล้ว' if n else 'ไม่เจอ (ข้าม)'}", Fore.CYAN)
+    finally:
+        lock.release()
+
+
+def _mg_fix_space_check(device, timeout=5):
+    """หา fix-space1 ภายใน timeout วิ — เจอ → เคลียร์ fix-space2→6 ให้จบก่อน (คืน True)
+    ไม่เจอ → คืน False แล้วทำงานตามปกติต่อ (ใช้หลังกด maxgacha4)"""
+    path = M.img_path("fix-space1.png")
+    start = time.time()
+    while M.bot_running and time.time() - start < timeout:
+        if M.ImgSearchADB(M.fast_screencap(device), path, FIX_SPACE_THRESHOLD):
+            M.log(device.serial, "เจอ fix-space1 → เคลียร์ fix-space ให้จบก่อน แล้วค่อยทำงานต่อ", Fore.YELLOW)
+            _mg_fix_space(device, blocking=True)
+            return True
+        time.sleep(0.3)
+    return False
 
 
 def _mg_popup_watchdog(device, stop_event):
@@ -876,7 +900,7 @@ def _mg_popup_watchdog(device, stop_event):
         # 1) fix-space1 (Not enough space!) → อันดับแรกสุด เจอปุ๊บเคลียร์ก่อนเลยทุก step
         if M.ImgSearchADB(img, space_path, FIX_SPACE_THRESHOLD):
             M.log(serial, "🛑 watchdog เจอ fix-space1 (Not enough space) → กด fix-space2→6 ก่อนอันดับแรก", Fore.YELLOW)
-            _mg_fix_space(device)
+            _mg_fix_space(device, blocking=False)   # main thread กำลังเคลียร์อยู่ → ข้าม (กันกดซ้อน)
             fixs_seen_since = None
             continue
         # 2) disk-full → บังคับเคลียร์ทันที
@@ -1050,22 +1074,16 @@ def _run_maxgacha_body(device, found):
         _mg_scan_items_window(device, found, secs=2.0)   # กวาดปิดท้ายอีกรอบกันของค้างบนจอ
         M.log(serial, "จบลูป maxgacha3 → ไปต่อ", Fore.CYAN)
     else:
-        # ไม่เจอ maxgacha3 → maxgacha4 → #step-ruby (maxgacha5 loop)
-        #   fix-space1 ให้ watchdog เฝ้าเคลียร์ตลอด (เจอปุ๊บทำปั๊บ) — ที่นี่แค่วนกด maxgacha4 จนไม่มี fix-space1 ค้าง
+        # ไม่เจอ maxgacha3 → maxgacha4 (15วิ) → #step-ruby
         M.log(serial, "ไม่เจอ maxgacha3 → maxgacha4 (#step-ruby)", Fore.YELLOW)
-        for _round in range(10):
-            if not M.bot_running:
-                break
-            _mg_click(device, "maxgacha4.bmp", timeout=15)
-            time.sleep(0.5)   # เผื่อ fix-space1 โผล่ → ให้ watchdog เคลียร์
-            if not M.ImgSearchADB(M.fast_screencap(device), M.img_path("fix-space1.png"), FIX_SPACE_THRESHOLD):
-                break   # ไม่มี fix-space1 ค้างแล้ว → ไปต่อ
-            M.log(serial, "ยังมี fix-space1 (watchdog เคลียร์อยู่) → วนกด maxgacha4 อีกรอบ", Fore.YELLOW)
-            time.sleep(1.5)
+        _mg_click(device, "maxgacha4.bmp", timeout=15)
+        # หลังกด maxgacha4 → หา fix-space1 5วิ ถ้าเจอ → เคลียร์ fix-space2→6 ให้จบก่อน ค่อยทำงานตามปกติ
+        _mg_fix_space_check(device, timeout=5)
         # กด maxgacha4 แล้วเจอ stop-step2 → cancel → ข้ามไป get-random25 (step2) เลย
         if _mg_stop_step2_jump(device):
             _mg_step2(device, found)
             return
+        # #step-ruby: disk-full (5วิ ไม่เจอข้าม) → maxgacha5 รัวจนไม่เจอ 5วิ + สแกน ITEM_GET_MAP
         _mg_disk_full(device)
         _mg_spam_until_gone(device, "maxgacha5.bmp", absent=5, found=found)
 
