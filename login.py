@@ -995,7 +995,7 @@ def _mg_popup_watchdog(device, stop_event):
         # 2) fix-crytalshop1 → กด fix-crytalshop2 ทันที แล้วทำงานตามปกติต่อ
         if M.ImgSearchADB(img, crytal_path):
             M.log(serial, "🛑 watchdog เจอ fix-crytalshop1 → กด fix-crytalshop2", Fore.YELLOW)
-            _mg_click_until_gone(device, "fix-crytalshop2.bmp")
+            M.wait_and_click(device, "fix-crytalshop2.bmp", timeout=5, required=False, post_delay=0.35)
             fixs_seen_since = None
             continue
         # 3) disk-full → บังคับเคลียร์ทันที
