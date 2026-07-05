@@ -1205,12 +1205,23 @@ def _run_maxgacha_body(device, found):
         round_num += 1
         M.log(serial, f"--- maxgacha4 loop รอบ {round_num}/5 ---", Fore.CYAN)
 
+        # รอให้ watchdog จัดการ disk-full/fixdisk เสร็จก่อน (กันหา maxgacha4 ไม่เจอเพราะหน้าจอยังเป็น fixdisk)
+        _dfl = _mg_dev_lock(_mg_diskfull_locks, device.serial)
+        _dfl.acquire()
+        _dfl.release()
+
         # เจอ stopmaxloop → หยุด loop ทันที (นับว่าครบ 5/5) → ไป step2
         if _check_stopmaxloop():
             break
 
-        if not _mg_click(device, "maxgacha4.bmp", timeout=8):
-            _mg_click(device, "maxgacha4fix.bmp", timeout=8)  # ลดราคา → ใช้รูปอีกแบบ
+        # หา maxgacha4 หรือ maxgacha4fix — ถ้าไม่เจอทั้งคู่ ข้ามรอบนี้ (ไม่ทำ step ที่เหลือ เพราะหน้าจอไม่ถูก)
+        clicked_mg4 = _mg_click(device, "maxgacha4.bmp", timeout=8)
+        if not clicked_mg4:
+            clicked_mg4 = _mg_click(device, "maxgacha4fix.bmp", timeout=8)  # ลดราคา → ใช้รูปอีกแบบ
+        if not clicked_mg4:
+            M.log(serial, "ไม่เจอ maxgacha4 / maxgacha4fix → ข้ามรอบนี้", Fore.YELLOW)
+            continue   # ข้ามไปรอบถัดไป (ไม่ทำ fix-space/disk-full/maxgacha5/draw-again โดยไม่มีของ)
+
         # หลังกด maxgacha4 → หา fix-space1 5วิ ถ้าเจอ → เคลียร์ fix-space2→6 ให้จบก่อน ค่อยทำงานตามปกติ
         _mg_fix_space_check(device, timeout=5)
         if _check_stopmaxloop():
