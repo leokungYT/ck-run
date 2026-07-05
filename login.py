@@ -855,8 +855,8 @@ def _mg_click_until_gone(device, name, absent=1.2, first_wait=2.5, max_secs=15,
 
 def _mg_fix_space(device, blocking=True):
     """เคลียร์ dialog "Not enough space!" ทีละปุ่ม 'กดจนปุ่มนั้นหาย' ค่อยไปปุ่มถัดไป:
-    fix-space2(Confirm)→3(Expand)→4(Confirm)→5(Confirm)→6(X)
-    ⚠️ fix-space1 เป็นแค่ 'ข้อความ' ไว้ detect ไม่ใช่ปุ่ม → เริ่มกดจริงที่ fix-space2
+    fix-space2new→fix-space2(Confirm)→3(Expand)→4(Confirm)→5(Confirm)→6(X)
+    ⚠️ fix-space1 เป็นแค่ 'ข้อความ' ไว้ detect ไม่ใช่ปุ่ม → เริ่มกดจริงที่ fix-space2new
     ใช้ lock ต่อเครื่อง (เรียกได้ทั้ง main thread หลัง maxgacha4 และ watchdog):
       blocking=True  → รอจนอีกฝั่งเคลียร์เสร็จ (main thread ต้องรอให้จบก่อนไปต่อ)
       blocking=False → ถ้าอีกฝั่งกำลังเคลียร์อยู่ก็ข้าม (watchdog กันกดซ้อน)"""
@@ -864,6 +864,9 @@ def _mg_fix_space(device, blocking=True):
     if not lock.acquire(blocking=blocking):
         return
     try:
+        # กด fix-space2new ก่อน แล้วค่อยไป fix-space2→6
+        n = _mg_click_until_gone(device, "fix-space2new.png", threshold=FIX_SPACE_THRESHOLD)
+        M.log(device.serial, f"  fix-space2new: {'กดแล้ว' if n else 'ไม่เจอ (ข้าม)'}", Fore.CYAN)
         for i in range(2, 7):
             n = _mg_click_until_gone(device, f"fix-space{i}.png", threshold=FIX_SPACE_THRESHOLD)
             M.log(device.serial, f"  fix-space{i}: {'กดแล้ว' if n else 'ไม่เจอ (ข้าม)'}", Fore.CYAN)
