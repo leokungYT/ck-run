@@ -765,6 +765,7 @@ def run_boxes(device):
 #  ⚠️ ต้องเพิ่มรูป maxgacha-step1.bmp + stop-ruby.bmp (ยังไม่มี — ตอนนี้จะข้าม/พึ่ง safety cap)
 # ═══════════════════════════════════════════════════════════════════════
 MAXGACHA_DIR = "img/max-gacha"
+CANCEL_TIMEOUT = 3   # ปุ่ม cancel/dialog dismiss — โผล่ไวหรือไม่โผล่เลย ไม่ต้องรอ 10 วิ (กันรอเปล่า)
 _mg_diskfull_locks = {}                # per-device lock (serial->Lock): กันเคลียร์ disk-full ซ้อน watchdog vs main thread 'เครื่องเดียวกัน'
 _mg_fixspace_locks = {}                # per-device lock: กันเคลียร์ fix-space ซ้อน watchdog vs main thread
 _mg_locks_guard = threading.Lock()     # กัน race ตอนสร้าง lock ใหม่ใน dict
@@ -1057,14 +1058,14 @@ def _mg_draw_again(device):
         # เจอ stop-step2 → cancel-step2 → cancel-step2v1 → break ออกไป get-random25 (step2) เลย
         if M.ImgSearchADB(img, M.img_path("stop-step2.bmp", MAXGACHA_DIR)):
             M.log(serial, "เจอ stop-step2 → cancel-step2 → cancel-step2v1 → ไป get-random25", Fore.GREEN)
-            _mg_click(device, "cancel-step2.bmp")
-            _mg_click(device, "cancel-step2v1.bmp")
+            _mg_click(device, "cancel-step2.bmp", timeout=CANCEL_TIMEOUT)
+            _mg_click(device, "cancel-step2v1.bmp", timeout=CANCEL_TIMEOUT)
             return
         # เจอ stop-ruby → cancel1 → cancel2
         if M.ImgSearchADB(img, M.img_path("stop-ruby.bmp", MAXGACHA_DIR)):
             M.log(serial, "เจอ stop-ruby → cancel1 → cancel2", Fore.GREEN)
-            _mg_click(device, "cancel1.bmp")
-            _mg_click(device, "cancel2.bmp")
+            _mg_click(device, "cancel1.bmp", timeout=CANCEL_TIMEOUT)
+            _mg_click(device, "cancel2.bmp", timeout=CANCEL_TIMEOUT)
             return
         if _mg_click(device, "draw-agin.bmp", timeout=5):
             _mg_disk_full(device)
@@ -1075,7 +1076,7 @@ def _mg_draw_again(device):
 
 
 def _mg_step2(device, found=None, absent=1):
-    """get-random25 → disk-full → ok-getstep2 (รัวจนเจอ stop-step2) → cancel-step2 (+v1/v2/v3)
+    """get-random25 → ok-getstep2 (รัวจนเจอ stop-step2) → cancel-step2 (+v1/v2/v3)  [disk-full = watchdog เคลียร์]
     ออกจากลูปเมื่อ: เจอ stop-step2 เท่านั้น (ไม่เจอ ok-getstep2 ครบ absent วิ → กด get-random25 ใหม่แล้ววนต่อ)
     ถ้า retry เกิน 3 ครั้ง → กด cancel-step2v2/v3 แล้วจบ step2 (ไม่เริ่มใหม่)
     ระหว่างวนสแกน ITEM_GET_MAP ทุกเฟรม + เว้นจังหวะ 2 วิ หลังกดรับของ (กันหาพลาด/ไม่จด)"""
@@ -1084,13 +1085,13 @@ def _mg_step2(device, found=None, absent=1):
 
     while M.bot_running:
         M.log(serial, "=== STEP2 ===", Fore.GREEN)
-        if not _mg_click(device, "get-random25.bmp", timeout=15):
+        if not _mg_click(device, "get-random25.bmp", timeout=8):
             M.log(serial, "ไม่เจอ get-random25 → กด fix-random25 แล้วหา get-random25 ใหม่", Fore.YELLOW)
-            _mg_click(device, "fix-random25.bmp", timeout=10)
-            if not _mg_click(device, "get-random25.bmp", timeout=15):
+            _mg_click(device, "fix-random25.bmp", timeout=5)
+            if not _mg_click(device, "get-random25.bmp", timeout=8):
                 M.log(serial, "⚠️ ยังไม่เจอ get-random25 หลัง fix-random25 (หน้า step2 อาจยังไม่เปิด)", Fore.YELLOW)
-        _mg_click(device, "fixmaxgacha.bmp", timeout=3)
-        _mg_disk_full(device)
+        _mg_click(device, "fixmaxgacha.bmp", timeout=2)
+        # disk-full ให้ watchdog เคลียร์ให้ (ไม่ต้องรอ disk-full1 5วิ ทุกรอบ)
 
         start = last_action = time.time()
         clicks = 0
@@ -1124,14 +1125,13 @@ def _mg_step2(device, found=None, absent=1):
                 if retries >= max_retries:
                     # ค้างครบ max_retries ครั้ง → cancel แล้วจบ step2 เลย (ไม่เริ่มใหม่)
                     M.log(serial, f"⚠️ retry ครบ {retries} ครั้ง → cancel แล้วจบ step2", Fore.YELLOW)
-                    _mg_click(device, "cancel-step2v2.bmp")
-                    _mg_click(device, "cancel-step2v3.bmp")
+                    _mg_click(device, "cancel-step2v2.bmp", timeout=CANCEL_TIMEOUT)
+                    _mg_click(device, "cancel-step2v3.bmp", timeout=CANCEL_TIMEOUT)
                     found_stop = True   # นับว่าจบ → ออกทั้งลูปใน+นอก
                     break
                 M.log(serial, f"ไม่เจอ ok-getstep2/stop-step2 ครบ {absent}s (กดไป {clicks} ครั้ง, retry {retries}/{max_retries}) → กด get-random25 ใหม่", Fore.YELLOW)
-                _mg_click(device, "get-random25.bmp", timeout=10)
-                _mg_click(device, "fixmaxgacha.bmp", timeout=3)
-                _mg_disk_full(device)
+                _mg_click(device, "get-random25.bmp", timeout=5)
+                _mg_click(device, "fixmaxgacha.bmp", timeout=1)
                 last_action = time.time()
             time.sleep(0.2)
 
@@ -1139,7 +1139,7 @@ def _mg_step2(device, found=None, absent=1):
             break   # เจอ stop-step2 → ออกลูปนอกไป cancel
 
     for n in ("cancel-step2.bmp", "cancel-step2v1.bmp", "cancel-step2v2.bmp", "cancel-step2v3.bmp"):
-        _mg_click(device, n)
+        _mg_click(device, n, timeout=CANCEL_TIMEOUT)
 
 
 def _mg_stop_step2_jump(device, timeout=3):
@@ -1149,8 +1149,8 @@ def _mg_stop_step2_jump(device, timeout=3):
     while M.bot_running and time.time() - start < timeout:
         if M.ImgSearchADB(M.fast_screencap(device), path):
             M.log(device.serial, "เจอ stop-step2 → cancel-step2 → cancel-step2v1 → ไป get-random25", Fore.GREEN)
-            _mg_click(device, "cancel-step2.bmp")
-            _mg_click(device, "cancel-step2v1.bmp")
+            _mg_click(device, "cancel-step2.bmp", timeout=CANCEL_TIMEOUT)
+            _mg_click(device, "cancel-step2v1.bmp", timeout=CANCEL_TIMEOUT)
             return True
         time.sleep(0.3)
     return False
