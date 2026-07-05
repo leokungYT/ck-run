@@ -1147,6 +1147,8 @@ def _mg_step2(device, found=None, absent=1):
         clicks = 0
         retries = 0
         max_retries = 3
+        cancel_attempts = 0
+        max_cancel_attempts = 1
         found_stop = False
         while M.bot_running and time.time() - start < C.LOOP_MAX_SECS:
             img = M.fast_screencap(device)
@@ -1173,23 +1175,30 @@ def _mg_step2(device, found=None, absent=1):
             elif time.time() - last_action > absent:
                 retries += 1
                 if retries >= max_retries:
-                    # ค้างครบ max_retries ครั้ง → กด cancel-step2v2/v3 แล้วลองใหม่อีก 3 ครั้ง
-                    M.log(serial, f"⚠️ retry ครบ {retries} ครั้ง → กด cancel-step2v2/v3 แล้วลองหาต่ออีก {max_retries} ครั้ง", Fore.YELLOW)
-                    _mg_click(device, "cancel-step2v2.bmp", timeout=CANCEL_TIMEOUT)
-                    _mg_click(device, "cancel-step2v3.bmp", timeout=CANCEL_TIMEOUT)
-                    retries = 0
-                    last_action = time.time()
-                    _mg_click(device, "get-random25.bmp", timeout=5)
-                    _mg_click(device, "fixmaxgacha.bmp", timeout=1)
-                    continue
+                    if cancel_attempts < max_cancel_attempts:
+                        cancel_attempts += 1
+                        M.log(serial, f"⚠️ retry ครบ {retries} ครั้ง → กด cancel-step2v2/v3 แล้วลองหาต่ออีก {max_retries} ครั้ง (รอบที่ {cancel_attempts}/{max_cancel_attempts})", Fore.YELLOW)
+                        _mg_click(device, "cancel-step2v2.bmp", timeout=CANCEL_TIMEOUT)
+                        _mg_click(device, "cancel-step2v3.bmp", timeout=CANCEL_TIMEOUT)
+                        retries = 0
+                        last_action = time.time()
+                        _mg_click(device, "get-random25.bmp", timeout=5)
+                        _mg_click(device, "fixmaxgacha.bmp", timeout=1)
+                        continue
+                    else:
+                        M.log(serial, f"⚠️ retry ครบ {retries} ครั้ง และแก้ตัวครบ {max_cancel_attempts} ครั้งแล้ว → cancel จบ step2", Fore.YELLOW)
+                        _mg_click(device, "cancel-step2v2.bmp", timeout=CANCEL_TIMEOUT)
+                        _mg_click(device, "cancel-step2v3.bmp", timeout=CANCEL_TIMEOUT)
+                        found_stop = True
+                        break
                 M.log(serial, f"ไม่เจอ ok-getstep2/stop-step2 ครบ {absent}s (กดไป {clicks} ครั้ง, retry {retries}/{max_retries}) → กด get-random25 ใหม่", Fore.YELLOW)
                 _mg_click(device, "get-random25.bmp", timeout=5)
                 _mg_click(device, "fixmaxgacha.bmp", timeout=1)
                 last_action = time.time()
             time.sleep(0.2)
 
-        if found_stop:
-            break   # เจอ stop-step2 → ออกลูปนอกไป cancel
+        if found_stop or (time.time() - start >= C.LOOP_MAX_SECS):
+            break   # ออกลูปนอกเมื่อเจอ stop-step2 หรือหมดเวลาเซฟตี้แคป
 
     for n in ("cancel-step2.bmp", "cancel-step2v1.bmp", "cancel-step2v2.bmp", "cancel-step2v3.bmp"):
         _mg_click(device, n, timeout=CANCEL_TIMEOUT)
