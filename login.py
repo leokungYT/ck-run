@@ -825,6 +825,14 @@ def _mg_disk_full(device, timeout=5):
             _mg_click(device, "disk-full3.bmp", timeout=10)
             # แก้ หลังจากกดdisk-full3 ให้มันกด draw-agin.bmpอีกรอบ หา 10sว่าเจอไหมไม่เจอtimeout
             _mg_click(device, "draw-agin.bmp", timeout=10)
+            
+            # ถ้าเจอ stop-step2 หรือ stop-ruby ให้ข้ามการหา fixdisk ทันที เพื่อประหยัดเวลา
+            img_chk = M.fast_screencap(device)
+            if M.ImgSearchADB(img_chk, M.img_path("stop-step2.bmp", MAXGACHA_DIR)) or \
+               M.ImgSearchADB(img_chk, M.img_path("stop-ruby.bmp", MAXGACHA_DIR)):
+                M.log(device.serial, "เจอ stop-step2/stop-ruby ใน disk-full → ข้าม fixdisk", Fore.YELLOW)
+                return
+                
             _mg_click_when_held(device, "fixdisk1.bmp", hold=10, timeout=40)
             _mg_click(device, "fixdisk2.bmp", timeout=10)
     finally:
@@ -1082,7 +1090,35 @@ def _mg_draw_again(device):
             return
         if _mg_click(device, "draw-agin.bmp", timeout=5):
             _mg_disk_full(device)
-            _mg_spam_until_gone(device, "ok-get.bmp", absent=5)
+            
+            # ระหว่างสแปม ok-get ให้เช็ค stop-step2 / stop-ruby ไปด้วย ตลอดเวลา!
+            ok_path = M.img_path("ok-get.bmp", MAXGACHA_DIR)
+            last_seen_ok = time.time()
+            stop_step2_path = M.img_path("stop-step2.bmp", MAXGACHA_DIR)
+            stop_ruby_path = M.img_path("stop-ruby.bmp", MAXGACHA_DIR)
+            
+            while M.bot_running and time.time() - last_seen_ok < 5:
+                img_loop = M.fast_screencap(device)
+                
+                # เช็ค stop-step2
+                if M.ImgSearchADB(img_loop, stop_step2_path):
+                    M.log(serial, "เจอ stop-step2 ระหว่าง ok-get → cancel-step2 → cancel-step2v1", Fore.GREEN)
+                    _mg_click(device, "cancel-step2.bmp", timeout=CANCEL_TIMEOUT)
+                    _mg_click(device, "cancel-step2v1.bmp", timeout=CANCEL_TIMEOUT)
+                    return
+                
+                # เช็ค stop-ruby
+                if M.ImgSearchADB(img_loop, stop_ruby_path):
+                    M.log(serial, "เจอ stop-ruby ระหว่าง ok-get → cancel1 → cancel2", Fore.GREEN)
+                    _mg_click(device, "cancel1.bmp", timeout=CANCEL_TIMEOUT)
+                    _mg_click(device, "cancel2.bmp", timeout=CANCEL_TIMEOUT)
+                    return
+                
+                pts = M.ImgSearchADB(img_loop, ok_path)
+                if pts:
+                    M.tap(device, *pts[0])
+                    last_seen_ok = time.time()
+                time.sleep(0.2)
         else:
             # ไม่เจอ draw-agin → ยังไม่ break (อาจเป็นเพราะ popup อื่นค้าง) → วนหาต่อ
             time.sleep(0.3)
