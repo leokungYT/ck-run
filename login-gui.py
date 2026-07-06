@@ -14,7 +14,7 @@ CONFIG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config-m
 # ── default steps (ตรงกับ login.py DEFAULTS) ──
 DEFAULT_STEPS = {
     "clean": 1, "restore": 1, "event": 1, "find": 0, "find_treasure": 0, "box": 1,
-    "check_ruby": 0, "maxgacha": 1, "maxpet": 1, "export": 1,
+    "check_ruby": 0, "maxgacha": 1, "maxpet": 1, "export": 1, "web_item": 1,
 }
 STEP_LABELS = {
     "clean":         "ลบข้อมูลเดิมก่อน restore",
@@ -27,6 +27,7 @@ STEP_LABELS = {
     "maxgacha":      "Max Gacha (สุ่ม item)",
     "maxpet":        "Max Pet (สุ่มจนเจอ trader)",
     "export":        "Export",
+    "web_item":      "Web Item (สร้างเว็บสถิติ set → web-item/index.html)",
 }
 # เปิด find/find_treasure → ปิด step พวกนี้อัตโนมัติ (ต้องรันเดี่ยวๆ) — box เปิดพร้อมได้
 FIND_STEPS = ("find", "find_treasure")
@@ -80,7 +81,6 @@ class ConfigWindow(ctk.CTkToplevel):
     def __init__(self, parent):
         super().__init__(parent)
         self.title("⚙  Setup Config (login)")
-        self.geometry("340x780")
         self.resizable(False, False)
         self.transient(parent)
         self.grab_set()
@@ -141,6 +141,17 @@ class ConfigWindow(ctk.CTkToplevel):
 
         ctk.CTkButton(self, text="💾  บันทึก", font=("Segoe UI", 13, "bold"),
                       height=36, corner_radius=8, command=self._save).pack(pady=(14, 10))
+
+        self._autosize()
+
+    def _autosize(self):
+        """ปรับขนาดหน้าต่างให้พอดีกับ widget อัตโนมัติ (ไม่ต้อง hardcode ความสูง)
+        — เพิ่ม/ลบ step แล้วหน้าต่างขยายเองตามจำนวนสวิตช์"""
+        self.update_idletasks()
+        w = max(340, self.winfo_reqwidth())
+        h = self.winfo_reqheight()
+        self.geometry(f"{w}x{h}")
+        self.minsize(w, h)
 
     def _apply_find_lock(self):
         """เปิด find/find_treasure → ปิด box/maxgacha/maxpet อัตโนมัติ + ล็อกสวิตช์ (find รันเดี่ยว)
@@ -235,6 +246,14 @@ class App(ctk.CTk):
         import login as LG
         LG.load_login_config()
         LG.M.set_process_priority()
+
+        # web_item เปิดอยู่ → ล้างสถิติเก่า (เริ่มชุดใหม่) แล้วเปิดหน้าเว็บเป็นหน้าต่างเล็ก
+        if LG.step_on("web_item"):
+            try:
+                LG.WEB.reset()       # เริ่มรันครั้งแรก → clear stats.json เริ่มชุดข้อมูลใหม่
+                LG.WEB.open_browser()
+            except Exception:
+                pass
 
         def _run():
             try:

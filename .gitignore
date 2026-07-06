@@ -15,6 +15,10 @@ _tmp_*/
 # per-device logs (อาจมี member ID / ชื่อบัญชี — ไม่ publish)
 logs/
 
+# web-item stats — ฝัง member ID ไว้ ไม่ publish (เว็บสถิติดูในเครื่องอย่างเดียว)
+web-item/stats.json
+web-item/index.html
+
 # Account data — DO NOT publish (game saves contain member IDs)
 *.zip
 backup/*.xml

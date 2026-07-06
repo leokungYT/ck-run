@@ -47,6 +47,7 @@ import multiprocessing as mp
 
 import config as C
 import main as M
+import web_item as WEB
 from ppadb.client import Client as AdbClient
 from colorama import Fore, Style, init
 
@@ -62,7 +63,7 @@ LOGIN_CONFIG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "co
 
 DEFAULTS = {
     "steps": {"clean": 1, "restore": 1, "event": 1, "find": 0, "find_treasure": 0, "box": 1,
-              "check_ruby": 0, "maxgacha": 1, "maxpet": 1, "export": 1},
+              "check_ruby": 0, "maxgacha": 1, "maxpet": 1, "export": 1, "web_item": 1},
     "event_rounds": C.EVENT_LOOP_ROUNDS,
     "config_name": C.CUSTOM_CONFIG_NAME,
     "input_dir": "input-id",
@@ -249,6 +250,8 @@ def restore_account(device, serial, zpath):
 #  (อารมณ์เดียวกับ export_backup_zip ตอนเจอ id — แค่ปลายทางคนละที่ + ตั้งชื่อตามไฟล์ต้นทาง)
 # ═══════════════════════════════════════════════════════════════════════
 _zip_lock = threading.Lock()
+# มี [ID] อยู่แล้วไหม — member id มีตัวอักษร ([RDNXK5360]) ต่างจาก ruby ที่เป็นเลขล้วน ([315])
+_HAS_ID_RE = re.compile(r"\[[A-Za-z][A-Za-z0-9]*\]")
 
 
 def reserve_out_path(out_dir, base):
@@ -290,6 +293,17 @@ def export_login_zip(device, out_name, out_dir):
         if not pulled:
             M.log(serial, "ไม่มีไฟล์ให้ zip → export ล้มเหลว", Fore.RED)
             return None
+
+        # ── ถ้าชื่อยังไม่มี [ID] → เจาะ Cocos2dxPrefsFile.xml ที่เพิ่ง pull มา ดึง member_id มาต่อท้าย ──
+        # (บัญชี input ที่ไม่มี [ID] ในชื่อ เช่น id-found จาก find/find_treasure จะได้ [ID] จริงจากในเกม)
+        if not _HAS_ID_RE.search(out_name):
+            mid_local = os.path.join(tmp_dir, C.MEMBER_ID_FILE)
+            member_id = M.extract_member_id(mid_local) if os.path.exists(mid_local) else None
+            if member_id:
+                out_name = f"{out_name.rstrip('+')}+[{member_id}]"
+                M.log(serial, f"  เจาะ member_id = {member_id} → ต่อท้ายชื่อ", Fore.GREEN)
+            else:
+                M.log(serial, f"  ⚠️ อ่าน member_id จาก {C.MEMBER_ID_FILE} ไม่ได้ → ชื่อไม่มี [ID]", Fore.YELLOW)
 
         zip_path = reserve_out_path(out_dir, out_name)
         with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
@@ -399,6 +413,67 @@ EVENT_NAMES = ("event-back.bmp", "git-item.bmp", "fix-daliy.png", "ok-gifitem.bm
 EVENT_CHECKPOINT = "check-pointevent.bmp"   # รูป checkpoint ก่อนเข้าหน้า event
 EVENT_CHECKPOINT_TIMEOUT = 30               # รอ checkpoint กี่วิ (ไม่เจอ → เริ่ม event เลย)
 EVENT_STOP_IMG = "stopeventloop.png"        # เจอรูปนี้ → break EVENT LOOP ทันที (ไม่ต้องครบรอบ)
+
+
+# ── เช็คว่าเกม "เข้าจริง" ไหม (กันเกมเด้ง/ปิดตอน start) ────────────────────
+GAME_ENTER_RETRY = 3       # ถ้าเกมเด้ง/ไม่เข้า → start ใหม่สูงสุดกี่ครั้ง
+GAME_ENTER_RELOAD_WAIT = 8  # หลัง start ใหม่ รอกี่วิ ให้เกมเริ่มโหลดก่อนเช็ครอบถัดไป
+
+
+def _app_alive(device):
+    """process ของเกมยังอยู่ไหม (เกมปิด/เด้ง = process หาย)
+    ลอง pidof ก่อน ถ้า ROM ไม่มี pidof → fallback อ่านจาก ps"""
+    out = (M._shell(device, f"pidof {C.PACKAGE}") or "").strip()
+    if "__ERR__" not in out and out and out.split()[0].isdigit():
+        return True
+    out2 = M._shell(device, "ps -A") or ""      # fallback: บาง ROM ไม่มี pidof
+    if "__ERR__" in out2:
+        out2 = M._shell(device, "ps") or ""
+    return "__ERR__" not in out2 and C.PACKAGE in out2
+
+
+def _app_foreground(device):
+    """เกมอยู่ 'หน้าจอบนสุด' (foreground) จริงไหม — อ่านจาก dumpsys
+    True = เกมเข้าถึงหน้าจอแล้ว (ไม่ได้เด้งกลับ launcher/ค้างพื้นหลัง)"""
+    for cmd in ("dumpsys activity activities", "dumpsys window windows"):
+        out = M._shell(device, cmd) or ""
+        if "__ERR__" in out:
+            continue
+        for line in out.splitlines():
+            if ("mResumedActivity" in line or "mCurrentFocus" in line
+                    or "mFocusedApp" in line) and C.PACKAGE in line:
+                return True
+    return False
+
+
+def ensure_game_entered(device):
+    """เช็คว่าเกม 'เข้าจริง' หลัง start — ถ้าเด้ง/ปิด/ไม่ขึ้นหน้าจอ → start ใหม่ (สูงสุด N ครั้ง)
+    คืน True ถ้าเข้าได้ | False ถ้าลองครบแล้วยังไม่เข้า (ปล่อยให้ step ถัดไปจัดการ)"""
+    serial = device.serial
+    for attempt in range(1, GAME_ENTER_RETRY + 1):
+        deadline = time.time() + max(int(LOGIN.get("start_wait", 15)), 12)
+        crashed = False
+        misses = 0                              # นับ process หายติดกัน (กันจังหวะเกมกำลัง launch)
+        while time.time() < deadline:
+            if not M.bot_running:
+                return False
+            _raise_if_login_failed(device)      # เจอ login-failed = ยกเลิกบัญชี (โยน exception)
+            if _app_foreground(device):
+                M.log(serial, f"✓ เกมเข้าแล้ว (foreground, ครั้งที่ {attempt})", Fore.GREEN)
+                return True
+            misses = misses + 1 if not _app_alive(device) else 0
+            if misses >= 3:                     # process หาย 3 ครั้งติด (~1.5s) = เด้ง/ปิดจริง → start ใหม่
+                crashed = True
+                break
+            time.sleep(0.5)
+        reason = "เด้ง/ปิด (ไม่มี process)" if crashed else "ไม่ขึ้นหน้าจอในเวลาที่รอ"
+        if attempt < GAME_ENTER_RETRY:
+            M.log(serial, f"⚠️ เกมไม่เข้า: {reason} (ครั้งที่ {attempt}/{GAME_ENTER_RETRY}) → start ใหม่", Fore.YELLOW)
+            M.start_game(device)
+            time.sleep(GAME_ENTER_RELOAD_WAIT)
+        else:
+            M.log(serial, f"❌ เกมไม่เข้า: {reason} — ลองครบ {GAME_ENTER_RETRY} ครั้งแล้ว → ไปต่อ", Fore.RED)
+    return False
 
 
 def wait_event_checkpoint(device):
@@ -638,11 +713,26 @@ def _color_screencap(device):
     return None
 
 
+def _resolve_img(name, folder):
+    """หา path รูป template โดยลองทั้ง .png และ .bmp
+    → config ระบุนามสกุลไหนมาก็ได้ (item4.png หรือ item4.bmp) เจอไฟล์จริงเป็นพอ
+    ลำดับ: ชื่อที่ให้มา → <base>.png → <base>.bmp (ไม่สนตัวพิมพ์เล็ก-ใหญ่ของนามสกุล)"""
+    given = M.img_path(name, folder)
+    if os.path.exists(given):
+        return given
+    base = os.path.splitext(name)[0]
+    for ext in (".png", ".bmp", ".PNG", ".BMP"):
+        p = M.img_path(base + ext, folder)
+        if os.path.exists(p):
+            return p
+    return given   # ไม่เจอเลย → คืนตัวเดิม ให้ imread แจ้ง error ตามปกติ
+
+
 def _treasure_match(device, img_name, timeout=3.0):
     """เช็ค item บนจอสี (แบบ ranger-gear): (1) match สีหา 'ตำแหน่ง' item (2) เทียบ 'สีจริง' ตรงนั้นกับ template
     → ตัวเทา/หรี่ (ยังไม่มี) รูปทรงเหมือนแต่สีต่าง (diff สูง) → ไม่นับ. รอสูงสุด timeout วิ"""
     serial = device.serial
-    path = M.img_path(img_name, TREASURE_ITEM_DIR)
+    path = _resolve_img(img_name, TREASURE_ITEM_DIR)
     tpl = M.cv2.imread(path, M.cv2.IMREAD_COLOR)   # template สี (BGR)
     if tpl is None:
         M.log(serial, f"treasure: โหลด template ไม่ได้ ({path})", Fore.YELLOW)
@@ -1453,9 +1543,9 @@ def process_account(device, serial, zpath):
 
     # 2) start packet (root ปิดอยู่ → เกมไม่เจอ root)
     M.start_game(device)
-    time.sleep(LOGIN["start_wait"])
 
     # popup watchdog — เฝ้า fix-space1 (+ disk-full/fixsumting) 'ทุก step' (เจอ fix-space1 = จัดการก่อนอันดับแรก)
+    # start ก่อนรอเกมเข้า เพื่อให้ popup ตอนโหลดเกมถูกปิดระหว่างเช็คว่าเกมเข้าจริง
     stop_wd = threading.Event()
     wd = threading.Thread(target=_mg_popup_watchdog, args=(device, stop_wd), daemon=True)
     wd.start()
@@ -1465,24 +1555,28 @@ def process_account(device, serial, zpath):
     try:
         _raise_if_login_failed(device)   # เจอ login-failed ตั้งแต่หลัง start → ยกเลิก
 
+        # 2.5) เช็คว่าเกมเข้าจริงไหม — เด้ง/ปิด/ไม่ขึ้นหน้าจอ → start ใหม่ (แทน sleep คงที่เดิม)
+        ensure_game_entered(device)
+
         # 3) event loops — รอ checkpoint event ให้เจอก่อน ค่อยเริ่ม EVENT LOOP
         if step_on("event"):
             wait_event_checkpoint(device)
             run_event_loops(device)
         M.log(serial, "login เสร็จ → ทำ config เพิ่ม (box / maxgacha)", Fore.CYAN)
 
-        # 3.5) find-treasure ก่อน — ค้นหาสมบัติตาม config-treasure.json (ถ้า find_treasure=1)
+        # 3.5) box — box1 → box2 → box3 (ไม่เจอ 15 วิ → กด box5 แล้วจบ) → box4-5 (ถ้า box=1)
+        #       ทำ box ก่อน แล้วค่อยไป find/find-treasure
+        if step_on("box"):
+            run_boxes(device)
+
+        # 3.6) find-treasure — ค้นหาสมบัติตาม config-treasure.json (ถ้า find_treasure=1)
         #      จดชื่อลง found (ไม่ clear) แล้วให้ find-pet ทำต่อ → รวมชื่อตอน export
         if step_on("find_treasure"):
             run_treasure(device, found)
 
-        # 3.6) find-pet — ค้นหาชื่อตาม config-findpet.json (ถ้า find=1) จดชื่อเพิ่มลง found
+        # 3.7) find-pet — ค้นหาชื่อตาม config-findpet.json (ถ้า find=1) จดชื่อเพิ่มลง found
         if step_on("find"):
             run_find(device, found)
-
-        # 4) box — box1 → box2 → box3 (ไม่เจอ 15 วิ → กด box5 แล้วจบ) → box4-5 (ถ้า box=1)
-        if step_on("box"):
-            run_boxes(device)
 
         # 4.5) check-ruby — หา checkpoint-ruby.bmp แล้ว OCR เลข (ถ้า check_ruby=1) เก็บไว้ต่อท้ายชื่อ zip
         if step_on("check_ruby"):
@@ -1547,6 +1641,14 @@ def process_account(device, serial, zpath):
             out_name = f"[{ruby}]+" + out_name.rstrip("+")
         out_dir = _shard_dir(out_dir)   # แบ่งเป็น part-XXXX กันไฟล์กระจุกจน Explorer ค้าง
         M.log(serial, f"→ เก็บ {out_name}.zip ใน {out_dir}/", Fore.GREEN)
+
+        # ── web_item: ก่อนส่งไฟล์ออก จดชื่อ set ที่เจอ → อัปเดตหน้าเว็บสถิติ ──
+        if step_on("web_item"):
+            try:
+                if WEB.record(out_name, out_dir):
+                    M.log(serial, "  🌐 อัปเดตสถิติ web-item/index.html", Fore.CYAN)
+            except Exception as e:
+                M.log(serial, f"  ⚠️ web_item บันทึกไม่ได้: {e}", Fore.YELLOW)
 
         M.close_app(device)
         device = M.enable_root(device)
@@ -1807,6 +1909,15 @@ def main():
         return
 
     M.bot_running = True
+
+    # web_item เปิดอยู่ → ล้างสถิติเก่า (เริ่มชุดใหม่) แล้วเปิดหน้าเว็บเป็นหน้าต่างเล็ก
+    if step_on("web_item"):
+        try:
+            WEB.reset()          # เริ่มรันครั้งแรก → clear stats.json เริ่มชุดข้อมูลใหม่
+            WEB.open_browser()
+        except Exception:
+            pass
+
     devices = M.discover_devices()
     if not devices:
         print(f"{Fore.RED}[ERROR] ไม่เจอ device{Style.RESET_ALL}")

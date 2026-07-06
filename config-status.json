@@ -1,0 +1,13 @@
+{
+  "_readme": "แม็พชื่อของ (ที่โผล่ในชื่อไฟล์) -> ไฟล์รูปใน img/item-status/  | เพิ่มรูปใหม่: วางไฟล์ png ใน img/item-status/ แล้วเพิ่มบรรทัดตรงนี้ | เทียบชื่อแบบไม่สนตัวพิมพ์เล็ก-ใหญ่/เว้นวรรค/ขีด (Trader = trader, white dragon = white-dragon)",
+  "treasure": {
+    "headking": "headking.png",
+    "banana": "banana.png",
+    "backpack": "coin-wallet.png"
+  },
+  "pet": {
+    "trader": "trader.png",
+    "lotus sitter": "lotus-sitter.png",
+    "white dragon": "white-dragon.png"
+  }
+}
