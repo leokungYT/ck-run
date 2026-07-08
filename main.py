@@ -56,9 +56,21 @@ STATS = {"cycles": 0, "backups": 0, "no_match": 0, "found": {}}
 STATS_LOCK = threading.Lock()
 
 
-def load_runtime_config():
+_last_config_mtime = 0
+
+
+def load_runtime_config(force=False):
     """โหลด configmain.json มาทับค่า default (ถ้าไม่มีไฟล์ → ใช้ค่าใน config.py)"""
-    global RUNTIME
+    global RUNTIME, _last_config_mtime
+    try:
+        mtime = os.path.getmtime(CONFIGMAIN_FILE) if os.path.exists(CONFIGMAIN_FILE) else 0
+    except Exception:
+        mtime = 0
+
+    if not force and _last_config_mtime != 0 and mtime == _last_config_mtime:
+        return RUNTIME
+
+    _last_config_mtime = mtime
     steps = dict(C.STEPS)
     event_rounds = C.EVENT_LOOP_ROUNDS
     config_name = C.CUSTOM_CONFIG_NAME
@@ -74,7 +86,7 @@ def load_runtime_config():
             event_rounds = int(loaded.get("event_rounds", event_rounds))
             config_name = str(loaded.get("config_name", config_name)).strip() or config_name
             split_by_count = 1 if loaded.get("split_by_count", split_by_count) else 0
-            print(f"{Fore.GREEN}[CONFIG] โหลด {os.path.basename(CONFIGMAIN_FILE)} แล้ว{Style.RESET_ALL}")
+            print(f"{Fore.GREEN}[CONFIG] โหลด {os.path.basename(CONFIGMAIN_FILE)} แล้ว (mtime={mtime}){Style.RESET_ALL}")
     except Exception as e:
         print(f"{Fore.YELLOW}[CONFIG] อ่าน configmain.json ไม่ได้: {e} → ใช้ค่า default{Style.RESET_ALL}")
     RUNTIME = {"steps": steps, "event_rounds": event_rounds, "config_name": config_name,
@@ -1193,6 +1205,9 @@ def process_device(serial_or_device):
 
     while bot_running:
         try:
+            # โหลด config ล่าสุดแบบ real-time เผื่อผู้ใช้แก้ไขระหว่างการทำงาน
+            load_runtime_config()
+
             found = set()
 
             # 1) start packet (ตอนนี้ root ปิดอยู่แล้ว → เกมไม่เจอ root) — ทำเสมอ
