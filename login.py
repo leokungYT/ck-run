@@ -86,12 +86,23 @@ DEFAULTS = {
     "web_view_id_found": 1,   # 1 = ดึงข้อมูลจาก id-found มาโชว์ใน web_view/web_item
     "web_view_backup_id": 1,  # 1 = ดึงข้อมูลจาก backup-id มาโชว์ใน web_view/web_item
 }
+_last_config_mtime = 0
 LOGIN = dict(DEFAULTS)
 
 
-def load_login_config():
+def load_login_config(force=False):
     """โหลด config-main.json มาทับ default (ไม่มีไฟล์ → ใช้ค่า default)"""
-    global LOGIN
+    global LOGIN, _last_config_mtime
+    
+    try:
+        mtime = os.path.getmtime(LOGIN_CONFIG_FILE) if os.path.exists(LOGIN_CONFIG_FILE) else 0
+    except Exception:
+        mtime = 0
+        
+    if not force and _last_config_mtime != 0 and mtime == _last_config_mtime:
+        return LOGIN
+        
+    _last_config_mtime = mtime
     cfg = dict(DEFAULTS)
     cfg["steps"] = dict(DEFAULTS["steps"])
     try:
@@ -126,7 +137,7 @@ def load_login_config():
             if "backup-id" in loaded:
                 cfg["web_view_backup_id"] = loaded["backup-id"]
 
-            print(f"{Fore.GREEN}[CONFIG] โหลด {os.path.basename(LOGIN_CONFIG_FILE)} แล้ว{Style.RESET_ALL}")
+            print(f"{Fore.GREEN}[CONFIG] โหลด {os.path.basename(LOGIN_CONFIG_FILE)} แล้ว (mtime={mtime}){Style.RESET_ALL}")
         else:
             print(f"{Fore.YELLOW}[CONFIG] ไม่เจอ {os.path.basename(LOGIN_CONFIG_FILE)} → ใช้ค่า default{Style.RESET_ALL}")
     except Exception as e:
@@ -501,8 +512,7 @@ def ensure_game_entered(device):
 
 
 def wait_event_checkpoint(device):
-    """รอ check-pointevent.bmp โผล่ก่อนเริ่ม EVENT LOOP (เจอ = เกมโหลดถึงหน้า event แล้ว)
-    ไม่เจอใน timeout → เริ่ม event เลย (กันค้าง)"""
+    """รอ check-pointevent.bmp โผล่ก่อนเริ่ม EVENT LOOP (เจอ = เกมโหลดถึงหน้า event แล้ว)"""
     serial = device.serial
     path = M.img_path(EVENT_CHECKPOINT)
     M.log(serial, f"รอ checkpoint event ({EVENT_CHECKPOINT})...", Fore.CYAN)
@@ -517,7 +527,7 @@ def wait_event_checkpoint(device):
             M.log(serial, "เจอ checkpoint event → เริ่ม EVENT LOOP", Fore.GREEN)
             return True
         time.sleep(0.3)
-    M.log(serial, f"ไม่เจอ checkpoint event ใน {EVENT_CHECKPOINT_TIMEOUT}s → เริ่ม EVENT LOOP เลย", Fore.YELLOW)
+    M.log(serial, f"ไม่เจอ checkpoint event ใน {EVENT_CHECKPOINT_TIMEOUT}s", Fore.RED)
     return False
 
 
@@ -1650,8 +1660,10 @@ def process_account(device, serial, zpath):
 
         # 3) event loops — รอ checkpoint event ให้เจอก่อน ค่อยเริ่ม EVENT LOOP
         if step_on("event"):
-            wait_event_checkpoint(device)
-            run_event_loops(device)
+            if wait_event_checkpoint(device):
+                run_event_loops(device)
+            else:
+                raise LoginFailed()
         M.log(serial, "login เสร็จ → ทำ config เพิ่ม (box / maxgacha)", Fore.CYAN)
 
         # 3.5) box — box1 → box2 → box3 (ไม่เจอ 15 วิ → กด box5 แล้วจบ) → box4-5 (ถ้า box=1)
@@ -1835,6 +1847,9 @@ def _worker_loop(serial, input_dir):
     done = fail = 0
 
     while M.bot_running:
+        # โหลด config ล่าสุดแบบ real-time เผื่อผู้ใช้แก้ไขระหว่างการทำงาน
+        load_login_config()
+
         # 1) เก็บงานค้างของ "เครื่องตัวเอง" ก่อน (เผื่อรอบก่อน crash ค้างใน _processing)
         leftovers = sorted(glob.glob(os.path.join(my_claim, "*.zip")))
         if leftovers:
