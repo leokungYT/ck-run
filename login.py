@@ -860,9 +860,11 @@ def run_boxes(device):
 #  ⚠️ ต้องเพิ่มรูป maxgacha-step1.bmp + stop-ruby.bmp (ยังไม่มี — ตอนนี้จะข้าม/พึ่ง safety cap)
 # ═══════════════════════════════════════════════════════════════════════
 MAXGACHA_DIR = "img/max-gacha"
-CANCEL_TIMEOUT = 3   # ปุ่ม cancel/dialog dismiss — โผล่ไวหรือไม่โผล่เลย ไม่ต้องรอ 10 วิ (กันรอเปล่า)
+CANCEL_TIMEOUT = 2   # ปุ่ม cancel/dialog dismiss — โผล่ไวหรือไม่โผล่เลย ไม่ต้องรอนาน (กันรอเปล่า)
+MAX_FIXSPACE_ABORT = 2   # เจอ "Not enough space!" ติดกันกี่รอบ → เลิก maxgacha ทั้ง step (ดิสก์เต็ม สุ่มไม่ได้)
 _mg_diskfull_locks = {}                # per-device lock (serial->Lock): กันเคลียร์ disk-full ซ้อน watchdog vs main thread 'เครื่องเดียวกัน'
 _mg_fixspace_locks = {}                # per-device lock: กันเคลียร์ fix-space ซ้อน watchdog vs main thread
+_mg_last_fixspace = {}                 # serial -> เวลา (epoch) ที่เคลียร์ fix-space ครั้งล่าสุด (main/watchdog ใครก็ได้)
 _mg_locks_guard = threading.Lock()     # กัน race ตอนสร้าง lock ใหม่ใน dict
 
 
@@ -873,6 +875,16 @@ def _mg_dev_lock(store, serial):
         if lk is None:
             lk = store[serial] = threading.Lock()
         return lk
+
+
+def _beat(serial, last_beat, msg, every=2.5):
+    """log heartbeat ทุก every วิ (กันลูปเงียบจนดูเหมือนค้าง) — คืนเวลา beat ล่าสุด
+    ใช้: last_beat = _beat(serial, last_beat, f'⏳ ...')"""
+    now = time.time()
+    if now - last_beat >= every:
+        M.log(serial, msg, Fore.CYAN)
+        return now
+    return last_beat
 
 
 def _mg_click(device, name, timeout=C.PLAY_STEP_TIMEOUT, post_delay=0.35):
@@ -934,8 +946,8 @@ def _mg_disk_full(device, timeout=5):
 FIX_SPACE_THRESHOLD = 0.72
 
 
-def _mg_click_until_gone(device, name, absent=1.2, first_wait=2.5, max_secs=15,
-                         post_delay=0.3, threshold=None):
+def _mg_click_until_gone(device, name, absent=0.7, first_wait=1.2, max_secs=12,
+                         post_delay=0.2, threshold=None):
     """กด name (รูปใน img/ default) 'รัวๆ จนปุ่มนั้นหาย' ติดต่อกัน absent วิ → คืน True
     ไม่เจอเลยใน first_wait วิแรก → คืน False (ข้ามไปปุ่มถัดไป) | ชน max_secs → หยุด"""
     path = M.img_path(name)
@@ -969,6 +981,7 @@ def _mg_fix_space(device, blocking=True):
     lock = _mg_dev_lock(_mg_fixspace_locks, device.serial)
     if not lock.acquire(blocking=blocking):
         return
+    _mg_last_fixspace[device.serial] = time.time()   # mark: เจอ/เคลียร์ fix-space รอบนี้ (ให้ maxgacha นับ)
     try:
         # 1) fix-space2 (กดจนหาย)
         n = _mg_click_until_gone(device, "fix-space2.png", threshold=FIX_SPACE_THRESHOLD)
@@ -984,7 +997,8 @@ def _mg_fix_space(device, blocking=True):
         _wait_next = time.time()
         _prev_seen3 = None
         _found3 = False
-        while M.bot_running and time.time() - _wait_next < 15:
+        _beat3 = time.time()
+        while M.bot_running and time.time() - _wait_next < 8:
             img = M.fast_screencap(device)
             pts = M.ImgSearchADB(img, path3, FIX_SPACE_THRESHOLD)
             if pts:
@@ -993,14 +1007,16 @@ def _mg_fix_space(device, blocking=True):
                 _found3 = True
                 time.sleep(0.3)
                 break
+            _beat3 = _beat(device.serial, _beat3,
+                           f"  ⏳ fix-space3: รอปุ่มโผล่... {time.time()-_wait_next:.0f}/8s")
             # ถ้ารูปเดิม (fix-space2new) ยังค้างอยู่เกิน 5วิ → ลองกดมัน
             prev_pts = M.ImgSearchADB(img, prev3, FIX_SPACE_THRESHOLD)
             if prev_pts:
                 if _prev_seen3 is None:
                     _prev_seen3 = time.time()
-                elif time.time() - _prev_seen3 >= 5:
+                elif time.time() - _prev_seen3 >= 3:
                     M.tap(device, *prev_pts[0])
-                    M.log(device.serial, "  fix-space3: รูปเดิม (fix-space2new) ค้างเกิน 5s → ลองกดรูปเดิม", Fore.YELLOW)
+                    M.log(device.serial, "  fix-space3: รูปเดิม (fix-space2new) ค้างเกิน 3s → ลองกดรูปเดิม", Fore.YELLOW)
                     _prev_seen3 = time.time()   # รีเซ็ตตัวนับ
                     time.sleep(0.3)
                     continue
@@ -1018,7 +1034,8 @@ def _mg_fix_space(device, blocking=True):
             _wait_start = time.time()
             _prev_seen = None
             _found_i = False
-            while M.bot_running and time.time() - _wait_start < 15:
+            _beat_i = time.time()
+            while M.bot_running and time.time() - _wait_start < 8:
                 img = M.fast_screencap(device)
                 pts = M.ImgSearchADB(img, p, FIX_SPACE_THRESHOLD)
                 if pts:
@@ -1027,14 +1044,16 @@ def _mg_fix_space(device, blocking=True):
                     _found_i = True
                     time.sleep(0.3)
                     break
+                _beat_i = _beat(device.serial, _beat_i,
+                                f"  ⏳ fix-space{i}: รอปุ่มโผล่... {time.time()-_wait_start:.0f}/8s")
                 # ถ้ารูปก่อนหน้ายังค้างอยู่เกิน 5วิ → ลองกดมัน
                 prev_pts = M.ImgSearchADB(img, prev_p, FIX_SPACE_THRESHOLD)
                 if prev_pts:
                     if _prev_seen is None:
                         _prev_seen = time.time()
-                    elif time.time() - _prev_seen >= 5:
+                    elif time.time() - _prev_seen >= 3:
                         M.tap(device, *prev_pts[0])
-                        M.log(device.serial, f"  fix-space{i}: รูปเดิม ({prev_names[i]}) ค้างเกิน 5s → ลองกดรูปเดิม", Fore.YELLOW)
+                        M.log(device.serial, f"  fix-space{i}: รูปเดิม ({prev_names[i]}) ค้างเกิน 3s → ลองกดรูปเดิม", Fore.YELLOW)
                         _prev_seen = time.time()   # รีเซ็ตตัวนับ
                         time.sleep(0.3)
                         continue
@@ -1056,7 +1075,7 @@ def _mg_fix_space(device, blocking=True):
         lock.release()
 
 
-def _mg_fix_space_check(device, timeout=5):
+def _mg_fix_space_check(device, timeout=3):
     """หา fix-space1 ภายใน timeout วิ — เจอ → เคลียร์ fix-space2→6 ให้จบก่อน (คืน True)
     ไม่เจอ → คืน False แล้วทำงานตามปกติต่อ (ใช้หลังกด maxgacha4)"""
     path = M.img_path("fix-space1.png")
@@ -1142,6 +1161,7 @@ def _mg_spam_until_gone(device, name, absent=5, found=None):
     """กด name รัวๆ จนไม่เจอติดต่อกัน absent วิ (สแกน ITEM ระหว่างวนถ้าส่ง found)"""
     path = M.img_path(name, MAXGACHA_DIR)
     last_seen = time.time()
+    last_beat = time.time()
     while M.bot_running and time.time() - last_seen < absent:
         img = M.fast_screencap(device)
         if found is not None:
@@ -1150,15 +1170,24 @@ def _mg_spam_until_gone(device, name, absent=5, found=None):
         if pts:
             M.tap(device, *pts[0])
             last_seen = time.time()
+        else:
+            left = absent - (time.time() - last_seen)
+            last_beat = _beat(device.serial, last_beat,
+                              f"⏳ รอ {name} หายจากจอ... อีก {left:.0f}s ถ้าไม่เจอแล้วไปต่อ")
         time.sleep(0.2)
+
+
+DRAW_IDLE_SECS = 8    # ไม่เจอ draw-agin/stop-step2/stop-ruby ต่อเนื่องกี่วิ → เลิก (กันค้างรอครบ 120s เปล่าๆ)
 
 
 def _mg_draw_again(device):
     """draw-agin → disk-full → ok-get (รัวจนหาย 5วิ) วนไปจนเจอ stop-step2 / stop-ruby
-    ไม่ break ตอนไม่เจอ draw-agin (เพราะอาจเป็นเพราะ disk-full/fixdisk ค้างอยู่) → วนหาต่อไปเรื่อยๆ"""
+    ไม่เจอ draw-agin/stop ต่อเนื่องเกิน DRAW_IDLE_SECS วิ → ออก (กันเกมค้าง popup แล้ววนรอ 120s)"""
     serial = device.serial
     M.log(serial, "--- draw-agin loop ---", Fore.MAGENTA)
     start = time.time()
+    last_progress = time.time()   # ครั้งสุดท้ายที่เจอ draw-agin (มีความคืบหน้า)
+    last_beat = time.time()
     while M.bot_running and time.time() - start < C.LOOP_MAX_SECS:
         # รอให้ watchdog จัดการ disk-full/fixdisk เสร็จก่อน (กันหน้าจอยังเป็น fixdisk แล้วหาปุ่มไม่เจอ)
         _dfl = _mg_dev_lock(_mg_diskfull_locks, device.serial)
@@ -1178,7 +1207,8 @@ def _mg_draw_again(device):
             _mg_click(device, "cancel1.bmp", timeout=CANCEL_TIMEOUT)
             _mg_click(device, "cancel2.bmp", timeout=CANCEL_TIMEOUT)
             return
-        if _mg_click(device, "draw-agin.bmp", timeout=5):
+        if _mg_click(device, "draw-agin.bmp", timeout=3):
+            last_progress = time.time()   # เจอ draw-agin = มีความคืบหน้า → รีเซ็ตตัวนับ idle
             _mg_disk_full(device)
             
             # ระหว่างสแปม ok-get ให้เช็ค stop-step2 / stop-ruby ไปด้วย ตลอดเวลา!
@@ -1210,8 +1240,16 @@ def _mg_draw_again(device):
                     last_seen_ok = time.time()
                 time.sleep(0.2)
         else:
-            # ไม่เจอ draw-agin → ยังไม่ break (อาจเป็นเพราะ popup อื่นค้าง) → วนหาต่อ
-            time.sleep(0.3)
+            # ไม่เจอ draw-agin/stop ต่อเนื่องเกิน DRAW_IDLE_SECS → เกมค้าง popup อยู่ → เลิกลูปนี้
+            idle = time.time() - last_progress
+            if idle > DRAW_IDLE_SECS:
+                M.log(serial, f"draw-agin/stop ไม่โผล่เกิน {DRAW_IDLE_SECS}s → ออกจาก draw-agin loop (กันค้าง)", Fore.YELLOW)
+                break
+            # heartbeat: บอกว่ากำลังหา draw-agin/stop อยู่ + นับถอยหลังก่อนจะยอมแพ้
+            last_beat = _beat(serial, last_beat,
+                              f"⏳ draw-agin loop: หา draw-agin/stop อยู่... idle {idle:.0f}/{DRAW_IDLE_SECS}s "
+                              f"(popup ค้าง? watchdog กำลังเคลียร์อยู่)")
+            time.sleep(0.25)
     M.log(serial, "จบ draw-agin loop", Fore.CYAN)
 
 
@@ -1238,7 +1276,7 @@ def _mg_step2(device, found=None, absent=1):
         retries = 0
         max_retries = 3
         cancel_attempts = 0
-        max_cancel_attempts = 3
+        max_cancel_attempts = 2
         found_stop = False
         while M.bot_running and time.time() - start < C.LOOP_MAX_SECS:
             img = M.fast_screencap(device)
@@ -1265,6 +1303,13 @@ def _mg_step2(device, found=None, absent=1):
             elif time.time() - last_action > absent:
                 retries += 1
                 if retries >= max_retries:
+                    # ไม่เคยกด ok-getstep2 ได้เลยสักครั้ง = step2 ไม่เปิด/ดิสก์เต็ม → เลิกเร็ว ไม่ต้องแก้ตัวหลายรอบ
+                    if clicks == 0:
+                        M.log(serial, "⚠️ step2 ไม่เจอ ok-getstep2 เลยสักครั้ง → เลิก step2 ทันที (ไม่กรีนด์)", Fore.RED)
+                        _mg_click(device, "cancel-step2v2.bmp", timeout=CANCEL_TIMEOUT)
+                        _mg_click(device, "cancel-step2v3.bmp", timeout=CANCEL_TIMEOUT)
+                        found_stop = True
+                        break
                     if cancel_attempts < max_cancel_attempts:
                         cancel_attempts += 1
                         M.log(serial, f"⚠️ retry ครบ {retries} ครั้ง → กด cancel-step2v2/v3 แล้วลองหาต่ออีก {max_retries} ครั้ง (รอบที่ {cancel_attempts}/{max_cancel_attempts})", Fore.YELLOW)
@@ -1348,8 +1393,10 @@ def _run_maxgacha_body(device, found):
         return False
 
     round_num = 0
+    fixspace_hits = 0   # นับ Not-enough-space ที่เจอติดกัน → เกินเกณฑ์ = ดิสก์เต็ม เลิก maxgacha
     while M.bot_running and round_num < 5:
         round_num += 1
+        round_start = time.time()   # ใช้เช็คว่ารอบนี้มีการเคลียร์ fix-space ไหม (main หรือ watchdog)
         M.log(serial, f"--- maxgacha4 loop รอบ {round_num}/5 ---", Fore.CYAN)
 
         # รอให้ watchdog จัดการ disk-full/fixdisk เสร็จก่อน (กันหา maxgacha4 ไม่เจอเพราะหน้าจอยังเป็น fixdisk)
@@ -1369,8 +1416,20 @@ def _run_maxgacha_body(device, found):
             M.log(serial, "ไม่เจอ maxgacha4 / maxgacha4fix → ข้ามรอบนี้", Fore.YELLOW)
             continue   # ข้ามไปรอบถัดไป (ไม่ทำ fix-space/disk-full/maxgacha5/draw-again โดยไม่มีของ)
 
-        # หลังกด maxgacha4 → หา fix-space1 5วิ ถ้าเจอ → เคลียร์ fix-space2→6 ให้จบก่อน ค่อยทำงานตามปกติ
-        _mg_fix_space_check(device, timeout=5)
+        # หลังกด maxgacha4 → หา fix-space1 3วิ ถ้าเจอ → เคลียร์ fix-space2→6 ให้จบก่อน ค่อยทำงานตามปกติ
+        # นับว่ารอบนี้เจอ Not-enough-space ไหม — เผื่อ watchdog เคลียร์ตัดหน้า main ไม่ทันเห็น → เช็ค timestamp ด้วย
+        hit = _mg_fix_space_check(device, timeout=3)
+        if not hit and _mg_last_fixspace.get(serial, 0) >= round_start:
+            hit = True
+        if hit:
+            fixspace_hits += 1
+            M.log(serial, f"⚠️ Not-enough-space (ดิสก์เต็ม) รอบที่ {fixspace_hits}/{MAX_FIXSPACE_ABORT}", Fore.YELLOW)
+            if fixspace_hits >= MAX_FIXSPACE_ABORT:
+                # ดิสก์เต็มซ้ำ = สุ่มของไม่ได้แน่ → เลิก maxgacha ทั้ง step (ข้าม step2) ไป export เลย
+                M.log(serial, f"❌ ดิสก์เต็มซ้ำ {fixspace_hits} รอบ → เลิก maxgacha (สุ่มไม่ได้) ข้ามไป export", Fore.RED)
+                return
+        else:
+            fixspace_hits = 0   # รอบนี้ไม่เจอ → รีเซ็ต (นับเฉพาะที่เจอ 'ติดกัน')
         if _check_stopmaxloop():
             break
         # เจอ stop-step2 → ออกลูปไป step2 เลย
