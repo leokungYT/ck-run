@@ -446,6 +446,7 @@ EVENT_APPEAR_TIMEOUT = 3   # รอรูป event โผล่ครั้ง�
 EVENT_NAMES = ("event-back.bmp", "git-item.bmp", "fix-daliy.png", "ok-gifitem.bmp", "fixnews.bmp")
 
 EVENT_CHECKPOINT = "check-pointevent.bmp"   # รูป checkpoint ก่อนเข้าหน้า event
+EVENT_CHECKPOINT_FIX = "fixcheck-pointevent.bmp" # รูป checkpoint event รุ่นสำรอง/แก้ไข
 EVENT_CHECKPOINT_TIMEOUT = 30               # รอ checkpoint กี่วิ (ไม่เจอ → เริ่ม event เลย)
 EVENT_STOP_IMG = "stopeventloop.png"        # เจอรูปนี้ → break EVENT LOOP ทันที (ไม่ต้องครบรอบ)
 
@@ -512,17 +513,18 @@ def ensure_game_entered(device):
 
 
 def wait_event_checkpoint(device):
-    """รอ check-pointevent.bmp โผล่ก่อนเริ่ม EVENT LOOP (เจอ = เกมโหลดถึงหน้า event แล้ว)"""
+    """รอ check-pointevent.bmp หรือ fixcheck-pointevent.bmp โผล่ก่อนเริ่มทำงาน"""
     serial = device.serial
     path = M.img_path(EVENT_CHECKPOINT)
-    M.log(serial, f"รอ checkpoint event ({EVENT_CHECKPOINT})...", Fore.CYAN)
+    path_fix = M.img_path(EVENT_CHECKPOINT_FIX)
+    M.log(serial, f"รอ checkpoint event ({EVENT_CHECKPOINT} หรือ {EVENT_CHECKPOINT_FIX})...", Fore.CYAN)
     while True:
         if not M.bot_running:
             return False
         img = M.fast_screencap(device)
         if M.ImgSearchADB(img, M.img_path(LOGIN_FAILED_IMG)):
             raise LoginFailed()
-        if M.ImgSearchADB(img, path):
+        if M.ImgSearchADB(img, path) or M.ImgSearchADB(img, path_fix):
             M.log(serial, "เจอ checkpoint event", Fore.GREEN)
             return True
         time.sleep(0.3)
