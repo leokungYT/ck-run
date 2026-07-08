@@ -272,9 +272,39 @@ def resolve_icon(name):
     return None
 
 
+def _icon_html(name):
+    safe = html.escape(name)
+    png = resolve_icon(name)
+    if png:
+        src = f"{ICON_REL_DIR}/{html.escape(png)}"
+        return (f'<span class="icon"><img src="{src}" alt="{safe}" '
+                f'title="{safe}" loading="lazy"></span>')
+    # ไม่มีรูป → กล่อง placeholder โชว์ชื่อย่อ (เพิ่มรูปได้ผ่าน config-status.json)
+    short = html.escape(name[:3].upper())
+    return (f'<span class="icon ph" title="{safe} (ยังไม่มีรูป)">{short}</span>')
+
+
+def _row_html(idx, g):
+    color = _BADGE_COLORS[idx % len(_BADGE_COLORS)]
+    icons = "".join(_icon_html(n) for n in g["names"])
+    names_txt = html.escape(" + ".join(g["names"]))
+    ids_txt = html.escape(", ".join(sorted(g["ids"]))) or "—"
+    cnt = g["count"]
+    return f'''    <div class="row">
+      <details>
+        <summary>
+          <span class="tri"></span>
+          <span class="icons">{icons}</span>
+          <span class="setname">{names_txt}</span>
+          <span class="badge" style="background:{color}">{cnt} ID</span>
+        </summary>
+        <div class="ids">{ids_txt}</div>
+      </details>
+    </div>'''
+
+
 def render(data=None):
-    """สร้าง web-item/index.html — embed stats ลงใน HTML ตรงๆ (รองรับ file:// protocol)
-    Python re-render ทุกครั้งที่ record()/reset() ถูกเรียก หน้าเว็บ auto-refresh ทุก 10 วินาที"""
+    """สร้าง web-item/index.html แบบ static สมบูรณ์จาก Python (ไม่ต้องโหลด JS ใดๆ)"""
     if data is None:
         data = _load()
     rows = summarize(data)
@@ -282,14 +312,17 @@ def render(data=None):
     total_sets = len(rows)
     now = time.strftime("%Y-%m-%d %H:%M:%S")
 
-    # serialize ข้อมูลเป็น JSON สำหรับ embed ใน <script>
-    stats_json = json.dumps(data, ensure_ascii=False)
+    if rows:
+        body = "\n".join(_row_html(i, g) for i, g in enumerate(rows))
+    else:
+        body = ('    <div class="empty">ยังไม่มีข้อมูล — '
+                'เปิด steps.web_item = 1 แล้วรัน login.py เพื่อเก็บสถิติ</div>')
 
     doc = _TEMPLATE.format(
         total_ids=total_ids,
         total_sets=total_sets,
         now=html.escape(now),
-        stats_json=stats_json,
+        rows=body,
     )
     os.makedirs(WEB_DIR, exist_ok=True)
     tmp = HTML_FILE + ".tmp"
@@ -299,8 +332,7 @@ def render(data=None):
     return HTML_FILE
 
 
-_TEMPLATE = """\
-<!doctype html>
+_TEMPLATE = """<!doctype html>
 <html lang="th">
 <head>
 <meta charset="utf-8">
@@ -378,69 +410,8 @@ _TEMPLATE = """\
   </div>
 </header>
 <main id="main-content">
-  <div class="empty">กำลังโหลด…</div>
+{rows}
 </main>
-
-<script>
-const ICON_DIR = "../img/item-status";
-const BADGE_COLORS = ["#2f7bf6","#12b886","#12b886","#f08c00","#e8590c","#e03131","#ae3ec9","#1098ad"];
-const STATS_DATA = {stats_json};
-
-function norm(s) {{ return s.replace(/[\s_-]+/g, "-").toLowerCase(); }}
-
-function iconHTML(name) {{
-  const safe = name.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/"/g, "&quot;");
-  const safePng = encodeURIComponent(name) + ".png";
-  const safeNormPng = encodeURIComponent(norm(name)) + ".png";
-  return '<span class="icon"><img'
-    + ' src="' + ICON_DIR + '/' + safePng + '"'
-    + ' onerror="this.onerror=null;this.src=\'' + ICON_DIR + '/' + safeNormPng + '\';'
-    + 'this.onerror=function(){{this.parentElement.className=\'icon ph\';this.parentElement.textContent=\'' + name.slice(0,3).toUpperCase() + '\'}}"'
-    + ' alt="' + safe + '" title="' + safe + '" loading="lazy"></span>';
-}}
-
-function summarize(ids) {{
-  const groups = {{}};
-  for (const [mid, rec] of Object.entries(ids)) {{
-    const names = rec.names || [];
-    if (!names.length) continue;
-    const key = names.join("+");
-    if (!groups[key]) groups[key] = {{ names: names, count: 0, ids: [] }};
-    groups[key].count++;
-    if (!mid.startsWith("_noid_")) groups[key].ids.push(mid);
-  }}
-  return Object.values(groups).sort(function(a, b) {{
-    return b.count - a.count || a.names.join().localeCompare(b.names.join());
-  }});
-}}
-
-function rowHTML(idx, g) {{
-  const color = BADGE_COLORS[idx % BADGE_COLORS.length];
-  const icons = g.names.map(iconHTML).join("");
-  const namesTxt = g.names.join(" + ").replace(/&/g, "&amp;");
-  const idsTxt = g.ids.length ? g.ids.slice().sort().join(", ").replace(/&/g, "&amp;") : "—";
-  return '<div class="row"><details>'
-    + '<summary>'
-    + '<span class="tri"></span>'
-    + '<span class="icons">' + icons + '</span>'
-    + '<span class="setname">' + namesTxt + '</span>'
-    + '<span class="badge" style="background:' + color + '">' + g.count + ' ID</span>'
-    + '</summary>'
-    + '<div class="ids">' + idsTxt + '</div>'
-    + '</details></div>';
-}}
-
-(function() {{
-  const ids = STATS_DATA.ids || {{}};
-  const rows = summarize(ids);
-  const main = document.getElementById("main-content");
-  if (rows.length) {{
-    main.innerHTML = rows.map(function(g, i) {{ return rowHTML(i, g); }}).join("");
-  }} else {{
-    main.innerHTML = '<div class="empty">ยังไม่มีข้อมูล — เปิด steps.web_item = 1 แล้วรัน login.py เพื่อเก็บสถิติ</div>';
-  }}
-}})();
-</script>
 </body>
 </html>
 """
