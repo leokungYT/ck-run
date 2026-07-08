@@ -310,9 +310,10 @@ def _row_html(idx, g):
     color = _BADGE_COLORS[idx % len(_BADGE_COLORS)]
     icons = "".join(_icon_html(n) for n in g["names"])
     names_txt = html.escape(" + ".join(g["names"]))
+    norm_names = ",".join(_norm(n) for n in g["names"])
     ids_txt = html.escape(", ".join(sorted(g["ids"]))) or "—"
     cnt = g["count"]
-    return f'''    <div class="row">
+    return f'''    <div class="row" data-items="{norm_names}">
       <details>
         <summary>
           <span class="tri"></span>
@@ -384,7 +385,27 @@ _TEMPLATE = """<!doctype html>
   .stat .n {{ font-size:24px; font-weight:700; }}
   .stat .l {{ font-size:12px; color:var(--muted); margin-top:2px; }}
   .updated {{ margin-left:auto; align-self:center; color:var(--muted); font-size:12px; }}
-  main {{ padding:16px 26px 60px; max-width:1100px; margin:0 auto; }}
+  .search-container {{
+    padding: 16px 26px 8px;
+    max-width: 1100px;
+    margin: 0 auto;
+  }}
+  .search-container input {{
+    width: 100%;
+    background: var(--card);
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    padding: 14px 18px;
+    color: var(--text);
+    font-size: 14px;
+    outline: none;
+    transition: all 0.25s ease;
+  }}
+  .search-container input:focus {{
+    border-color: #2f7bf6;
+    box-shadow: 0 0 0 3px rgba(47, 123, 246, 0.15);
+  }}
+  main {{ padding:8px 26px 60px; max-width:1100px; margin:0 auto; }}
   .row {{ margin:8px 0; }}
   details {{
     background:var(--row); border:1px solid var(--line); border-radius:12px;
@@ -431,9 +452,51 @@ _TEMPLATE = """<!doctype html>
     <div class="updated">อัปเดตล่าสุด {now}</div>
   </div>
 </header>
+<div class="search-container">
+  <input type="text" id="search-input" placeholder="🔍 ค้นหาเซ็ต เช่น trader+banana+headking" oninput="handleSearchInput()">
+</div>
 <main id="main-content">
 {rows}
 </main>
+<script>
+function filterRows() {{
+  const query = document.getElementById("search-input").value.toLowerCase().trim();
+  const rows = document.querySelectorAll(".row");
+  if (!query) {{
+    rows.forEach(r => r.style.display = "");
+    return;
+  }}
+  const terms = query.split("+").map(t => t.trim().replace(/[\s_-]+/g, "-")).filter(t => t.length > 0);
+  
+  rows.forEach(row => {{
+    const itemsAttr = row.getAttribute("data-items") || "";
+    const items = itemsAttr.split(",");
+    const matchesAll = terms.every(term => {{
+      return items.some(item => item.indexOf(term) !== -1);
+    }});
+    if (matchesAll) {{
+      row.style.display = "";
+    }} else {{
+      row.style.display = "none";
+    }}
+  }});
+}}
+
+function handleSearchInput() {{
+  const val = document.getElementById("search-input").value;
+  localStorage.setItem("search_query", val);
+  filterRows();
+}}
+
+document.addEventListener("DOMContentLoaded", () => {{
+  const savedQuery = localStorage.getItem("search_query") || "";
+  const input = document.getElementById("search-input");
+  if (input && savedQuery) {{
+    input.value = savedQuery;
+    filterRows();
+  }}
+}});
+</script>
 </body>
 </html>
 """
