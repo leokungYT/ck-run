@@ -135,37 +135,59 @@ def _found_dir():
     return fd if os.path.isabs(fd) else os.path.join(BASE_DIR, fd)
 
 
+def _backup_dir():
+    """path ของโฟลเดอร์ backup-id (อ่านจาก config-main.json → backup_id_dir)"""
+    bd = "backup-id"
+    try:
+        with open(MAIN_CONFIG, "r", encoding="utf-8") as f:
+            bd = (json.load(f).get("backup_id_dir") or bd)
+    except Exception:
+        pass
+    return bd if os.path.isabs(bd) else os.path.join(BASE_DIR, bd)
+
+
 def scan_found():
-    """สแกนไฟล์ .zip ทั้งหมดใน id-found (รวม part-XXXX ย่อย) → dict {key: rec}
-    key = member id ([RDNXK5360]) ถ้ามี ไม่งั้นใช้ path (กันไฟล์ไม่มี id นับซ้ำ)"""
+    """สแกนไฟล์ .zip ทั้งหมดใน id-found และ backup-id (รวม part-XXXX ย่อย) → dict {key: rec}"""
     recs = {}
-    base = _found_dir()
-    if not os.path.isdir(base):
-        return recs
-    for root, _dirs, files in os.walk(base):
-        for fn in files:
-            if not fn.lower().endswith(".zip"):
-                continue
-            nm = _ID_SUFFIX_RE.sub("", os.path.splitext(fn)[0])   # ตัด _2/_3 ท้าย
-            names, member = parse_name(nm)
-            if not names:
-                continue
-            key = member or "_file_" + os.path.relpath(os.path.join(root, fn), base)
-            recs[key] = {"names": _order_names(names),
-                         "dir": os.path.basename(base), "ts": 0}
+    bases = []
+    # โฟลเดอร์ id-found
+    fd = _found_dir()
+    if os.path.isdir(fd):
+        bases.append(fd)
+    # โฟลเดอร์ backup-id
+    bd = _backup_dir()
+    if os.path.isdir(bd):
+        bases.append(bd)
+
+    for base in bases:
+        for root, _dirs, files in os.walk(base):
+            for fn in files:
+                if not fn.lower().endswith(".zip"):
+                    continue
+                nm = _ID_SUFFIX_RE.sub("", os.path.splitext(fn)[0])   # ตัด _2/_3 ท้าย
+                names, member = parse_name(nm)
+                if not names:
+                    continue
+                key = member or "_file_" + os.path.relpath(os.path.join(root, fn), base)
+                recs[key] = {
+                    "names": _order_names(names),
+                    "dir": os.path.basename(base),
+                    "ts": 0
+                }
     return recs
 
 
 def reset():
-    """เริ่มชุดข้อมูลใหม่ — ล้าง stats.json ให้ว่างเปล่า (เริ่มใหม่ตั้งแต่ต้น)"""
+    """เริ่มชุดข้อมูลใหม่ — ล้าง stats.json และโหลดข้อมูลจากไฟล์จริงที่ยังอยู่ในเครื่องเท่านั้น (id-found + backup-id)"""
     with _LOCK:
-        data = {"ids": {}}
+        existing = scan_found()
+        data = {"ids": existing}
         _save(data)
         try:
             render(data)
         except Exception:
             pass
-        return 0
+        return len(existing)
 
 
 def record(out_name, out_dir=""):
