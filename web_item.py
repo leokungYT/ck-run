@@ -272,52 +272,40 @@ def resolve_icon(name):
     return None
 
 
-def _icon_html(name):
-    safe = html.escape(name)
-    png = resolve_icon(name)
-    if png:
-        src = f"{ICON_REL_DIR}/{html.escape(png)}"
-        return (f'<span class="icon"><img src="{src}" alt="{safe}" '
-                f'title="{safe}" loading="lazy"></span>')
-    # ไม่มีรูป → กล่อง placeholder โชว์ชื่อย่อ (เพิ่มรูปได้ผ่าน config-status.json)
-    short = html.escape(name[:3].upper())
-    return (f'<span class="icon ph" title="{safe} (ยังไม่มีรูป)">{short}</span>')
-
-
-def _row_html(idx, g):
-    color = _BADGE_COLORS[idx % len(_BADGE_COLORS)]
-    icons = "".join(_icon_html(n) for n in g["names"])
-    names_txt = html.escape(" + ".join(g["names"]))
-    ids_txt = html.escape(", ".join(sorted(g["ids"]))) or "—"
-    cnt = g["count"]
-    return f'''    <div class="row">
-      <details>
-        <summary>
-          <span class="tri"></span>
-          <span class="icons">{icons}</span>
-          <span class="setname">{names_txt}</span>
-          <span class="badge" style="background:{color}">{cnt} ID</span>
-        </summary>
-        <div class="ids">{ids_txt}</div>
-      </details>
-    </div>'''
-
-
 def render(data=None):
-    """สร้าง web-item/index.html (dynamic template — ดึง stats.json ด้วย JS)"""
+    """สร้าง web-item/index.html — embed stats ลงใน HTML ตรงๆ (รองรับ file:// protocol)
+    Python re-render ทุกครั้งที่ record()/reset() ถูกเรียก หน้าเว็บ auto-refresh ทุก 10 วินาที"""
+    if data is None:
+        data = _load()
+    rows = summarize(data)
+    total_ids = sum(g["count"] for g in rows)
+    total_sets = len(rows)
+    now = time.strftime("%Y-%m-%d %H:%M:%S")
+
+    # serialize ข้อมูลเป็น JSON สำหรับ embed ใน <script>
+    stats_json = json.dumps(data, ensure_ascii=False)
+
+    doc = _TEMPLATE.format(
+        total_ids=total_ids,
+        total_sets=total_sets,
+        now=html.escape(now),
+        stats_json=stats_json,
+    )
     os.makedirs(WEB_DIR, exist_ok=True)
     tmp = HTML_FILE + ".tmp"
     with open(tmp, "w", encoding="utf-8") as f:
-        f.write(_TEMPLATE)
+        f.write(doc)
     os.replace(tmp, HTML_FILE)
     return HTML_FILE
 
 
-_TEMPLATE = """<!doctype html>
+_TEMPLATE = """\
+<!doctype html>
 <html lang="th">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="refresh" content="10">
 <title>Item Stats — Cookie Run</title>
 <style>
   :root {{
@@ -378,109 +366,80 @@ _TEMPLATE = """<!doctype html>
     border-top:1px solid var(--line); word-break:break-all;
   }}
   .empty {{ color:var(--muted); padding:40px; text-align:center; }}
-  .dot {{
-    display:inline-block; width:8px; height:8px; border-radius:50%;
-    background:#12b886; margin-left:6px; vertical-align:middle;
-    animation: pulse 2s infinite;
-  }}
-  @keyframes pulse {{
-    0%,100%{{opacity:1}} 50%{{opacity:.3}}
-  }}
 </style>
 </head>
 <body>
 <header>
-  <h1>📊 สถิติ Item Set ที่เจอ<span class="dot" title="อัปเดตอัตโนมัติทุก 5 วินาที"></span></h1>
+  <h1>📊 สถิติ Item Set ที่เจอ</h1>
   <div class="stats">
-    <div class="stat"><div class="n" id="total-ids">—</div><div class="l">รวมทั้งหมด (ID)</div></div>
-    <div class="stat"><div class="n" id="total-sets">—</div><div class="l">จำนวน set</div></div>
-    <div class="updated" id="updated-time">กำลังโหลด…</div>
+    <div class="stat"><div class="n">{total_ids}</div><div class="l">รวมทั้งหมด (ID)</div></div>
+    <div class="stat"><div class="n">{total_sets}</div><div class="l">จำนวน set</div></div>
+    <div class="updated">อัปเดตล่าสุด {now}</div>
   </div>
 </header>
 <main id="main-content">
-  <div class="empty">กำลังโหลดข้อมูล…</div>
+  <div class="empty">กำลังโหลด…</div>
 </main>
 
 <script>
 const ICON_DIR = "../img/item-status";
 const BADGE_COLORS = ["#2f7bf6","#12b886","#12b886","#f08c00","#e8590c","#e03131","#ae3ec9","#1098ad"];
+const STATS_DATA = {stats_json};
 
-function norm(s){{ return s.replace(/[\s_-]+/g,"-").toLowerCase(); }}
+function norm(s) {{ return s.replace(/[\s_-]+/g, "-").toLowerCase(); }}
 
 function iconHTML(name) {{
-  const safe = name.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/"/g,"&quot;");
+  const safe = name.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/"/g, "&quot;");
   const safePng = encodeURIComponent(name) + ".png";
   const safeNormPng = encodeURIComponent(norm(name)) + ".png";
-  return `<span class="icon"><img
-    src="${{ICON_DIR}}/${{safePng}}"
-    onerror="this.onerror=null;this.src='${{ICON_DIR}}/${{safeNormPng}}';this.onerror=function(){{this.parentElement.className='icon ph';this.parentElement.textContent='${{name.slice(0,3).toUpperCase()}}'}}"
-    alt="${{safe}}" title="${{safe}}" loading="lazy"></span>`;
+  return '<span class="icon"><img'
+    + ' src="' + ICON_DIR + '/' + safePng + '"'
+    + ' onerror="this.onerror=null;this.src=\'' + ICON_DIR + '/' + safeNormPng + '\';'
+    + 'this.onerror=function(){{this.parentElement.className=\'icon ph\';this.parentElement.textContent=\'' + name.slice(0,3).toUpperCase() + '\'}}"'
+    + ' alt="' + safe + '" title="' + safe + '" loading="lazy"></span>';
 }}
-
-function setKey(names){{ return names.join("+"); }}
 
 function summarize(ids) {{
   const groups = {{}};
   for (const [mid, rec] of Object.entries(ids)) {{
     const names = rec.names || [];
     if (!names.length) continue;
-    const key = setKey(names);
-    if (!groups[key]) groups[key] = {{ names, count:0, ids:[] }};
+    const key = names.join("+");
+    if (!groups[key]) groups[key] = {{ names: names, count: 0, ids: [] }};
     groups[key].count++;
     if (!mid.startsWith("_noid_")) groups[key].ids.push(mid);
   }}
-  return Object.values(groups).sort((a,b) => b.count - a.count || a.names.join().localeCompare(b.names.join()));
+  return Object.values(groups).sort(function(a, b) {{
+    return b.count - a.count || a.names.join().localeCompare(b.names.join());
+  }});
 }}
 
 function rowHTML(idx, g) {{
   const color = BADGE_COLORS[idx % BADGE_COLORS.length];
   const icons = g.names.map(iconHTML).join("");
-  const namesTxt = g.names.join(" + ").replace(/&/g,"&amp;");
-  const idsTxt = g.ids.length ? g.ids.sort().join(", ").replace(/&/g,"&amp;") : "—";
-  return `    <div class="row">
-      <details>
-        <summary>
-          <span class="tri"></span>
-          <span class="icons">${{icons}}</span>
-          <span class="setname">${{namesTxt}}</span>
-          <span class="badge" style="background:${{color}}">${{g.count}} ID</span>
-        </summary>
-        <div class="ids">${{idsTxt}}</div>
-      </details>
-    </div>`;
+  const namesTxt = g.names.join(" + ").replace(/&/g, "&amp;");
+  const idsTxt = g.ids.length ? g.ids.slice().sort().join(", ").replace(/&/g, "&amp;") : "—";
+  return '<div class="row"><details>'
+    + '<summary>'
+    + '<span class="tri"></span>'
+    + '<span class="icons">' + icons + '</span>'
+    + '<span class="setname">' + namesTxt + '</span>'
+    + '<span class="badge" style="background:' + color + '">' + g.count + ' ID</span>'
+    + '</summary>'
+    + '<div class="ids">' + idsTxt + '</div>'
+    + '</details></div>';
 }}
 
-let lastJson = "";
-
-async function refresh() {{
-  try {{
-    const res = await fetch("stats.json?_=" + Date.now());
-    if (!res.ok) throw new Error("HTTP " + res.status);
-    const raw = await res.text();
-    if (raw === lastJson) return;
-    lastJson = raw;
-    const data = JSON.parse(raw);
-    const ids = data.ids || {{}};
-    const rows = summarize(ids);
-    const totalIds = rows.reduce((s,g)=>s+g.count,0);
-    const totalSets = rows.length;
-    document.getElementById("total-ids").textContent = totalIds;
-    document.getElementById("total-sets").textContent = totalSets;
-    const now = new Date().toLocaleString("th-TH",{{hour12:false}});
-    document.getElementById("updated-time").textContent = "อัปเดตล่าสุด " + now;
-    const main = document.getElementById("main-content");
-    if (rows.length) {{
-      main.innerHTML = rows.map((g,i)=>rowHTML(i,g)).join("\n");
-    }} else {{
-      main.innerHTML = '<div class="empty">ยังไม่มีข้อมูล — เปิด steps.web_item = 1 แล้วรัน login.py เพื่อเก็บสถิติ</div>';
-    }}
-  }} catch(e) {{
-    document.getElementById("updated-time").textContent = "โหลดไม่ได้: " + e.message;
+(function() {{
+  const ids = STATS_DATA.ids || {{}};
+  const rows = summarize(ids);
+  const main = document.getElementById("main-content");
+  if (rows.length) {{
+    main.innerHTML = rows.map(function(g, i) {{ return rowHTML(i, g); }}).join("");
+  }} else {{
+    main.innerHTML = '<div class="empty">ยังไม่มีข้อมูล — เปิด steps.web_item = 1 แล้วรัน login.py เพื่อเก็บสถิติ</div>';
   }}
-}}
-
-refresh();
-setInterval(refresh, 5000);
+}})();
 </script>
 </body>
 </html>
