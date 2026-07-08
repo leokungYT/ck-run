@@ -63,7 +63,7 @@ LOGIN_CONFIG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "co
 
 DEFAULTS = {
     "steps": {"clean": 1, "restore": 1, "event": 1, "find": 0, "find_treasure": 0, "box": 1,
-              "check_ruby": 0, "maxgacha": 1, "maxpet": 1, "export": 1, "web_item": 1},
+              "check_ruby": 0, "maxgacha": 1, "maxpet": 1, "export": 1, "web_item": 1, "web_view": 1},
     "event_rounds": C.EVENT_LOOP_ROUNDS,
     "config_name": C.CUSTOM_CONFIG_NAME,
     "input_dir": "input-id",
@@ -83,6 +83,8 @@ DEFAULTS = {
     "extra_pet": "",          # ชื่อบังคับของ find-pet (ควรอยู่ใน config-findpet.json เช่น trader)
     "extra_check_sombut": 0,  # find-treasure: บังคับต้องเจอชื่อ extra_sombut ไม่งั้นปัด → not-found (0 = ปิด)
     "extra_sombut": "",       # ชื่อ output บังคับของ find-treasure (ควรเป็น name ใน config-treasure.json)
+    "web_view_id_found": 1,   # 1 = ดึงข้อมูลจาก id-found มาโชว์ใน web_view/web_item
+    "web_view_backup_id": 1,  # 1 = ดึงข้อมูลจาก backup-id มาโชว์ใน web_view/web_item
 }
 LOGIN = dict(DEFAULTS)
 
@@ -96,17 +98,34 @@ def load_login_config():
         if os.path.exists(LOGIN_CONFIG_FILE):
             with open(LOGIN_CONFIG_FILE, "r", encoding="utf-8") as f:
                 loaded = json.load(f)
+            # โหลด steps
             for k, v in (loaded.get("steps") or {}).items():
                 key = k.replace("-", "_")
                 if key in cfg["steps"]:
                     cfg["steps"][key] = 1 if v else 0
+            # map aliases ใน steps
+            if "web_view" in cfg["steps"] or "web_item" in cfg["steps"]:
+                val = cfg["steps"].get("web_view", 1) or cfg["steps"].get("web_item", 1)
+                cfg["steps"]["web_view"] = val
+                cfg["steps"]["web_item"] = val
+
             for k in ("event_rounds", "config_name", "input_dir", "output_dir",
                       "backup_id_dir", "random_fail_dir", "login_failed_dir",
                       "found_dir", "not_found_dir", "failed_dir", "claim_dir", "start_wait", "shard_size",
                       "log_dir", "log_console",
-                      "extra_check_pet", "extra_pet", "extra_check_sombut", "extra_sombut"):
+                      "extra_check_pet", "extra_pet", "extra_check_sombut", "extra_sombut",
+                      "web_view_id_found", "web_view_backup_id"):
                 if k in loaded:
                     cfg[k] = loaded[k]
+                elif k.replace("_", "-") in loaded:
+                    cfg[k] = loaded[k.replace("_", "-")]
+            
+            # map direct aliases
+            if "id-found" in loaded:
+                cfg["web_view_id_found"] = loaded["id-found"]
+            if "backup-id" in loaded:
+                cfg["web_view_backup_id"] = loaded["backup-id"]
+
             print(f"{Fore.GREEN}[CONFIG] โหลด {os.path.basename(LOGIN_CONFIG_FILE)} แล้ว{Style.RESET_ALL}")
         else:
             print(f"{Fore.YELLOW}[CONFIG] ไม่เจอ {os.path.basename(LOGIN_CONFIG_FILE)} → ใช้ค่า default{Style.RESET_ALL}")
@@ -123,6 +142,8 @@ def load_login_config():
     cfg["extra_check_sombut"] = 1 if cfg.get("extra_check_sombut") else 0
     cfg["extra_sombut"] = str(cfg.get("extra_sombut", "")).strip()
     cfg["config_name"] = str(cfg["config_name"]).strip() or C.CUSTOM_CONFIG_NAME
+    cfg["web_view_id_found"] = 1 if cfg.get("web_view_id_found", 1) else 0
+    cfg["web_view_backup_id"] = 1 if cfg.get("web_view_backup_id", 1) else 0
     LOGIN = cfg
 
     # push ค่าเข้า config เพื่อให้ engine เดิม (run_event_loops) ใช้ทันที
@@ -132,11 +153,14 @@ def load_login_config():
     enabled = [k for k, v in cfg["steps"].items() if v]
     print(f"{Fore.CYAN}[CONFIG] step ที่เปิด: {enabled} | event_rounds={cfg['event_rounds']} "
           f"| config_name='{cfg['config_name']}'{Style.RESET_ALL}")
+    print(f"{Fore.CYAN}[CONFIG] web_view: id-found={cfg['web_view_id_found']} | backup-id={cfg['web_view_backup_id']}{Style.RESET_ALL}")
     print(f"{Fore.CYAN}[CONFIG] input={cfg['input_dir']} → output={cfg['output_dir']}{Style.RESET_ALL}")
     return LOGIN
 
 
 def step_on(name):
+    if name == "web_item" or name == "web_view":
+        return bool(LOGIN.get("steps", {}).get("web_item", 1)) or bool(LOGIN.get("steps", {}).get("web_view", 1))
     return bool(LOGIN.get("steps", {}).get(name, 1))
 
 

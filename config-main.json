@@ -10,7 +10,8 @@
     "maxgacha": 0,
     "maxpet": 0,
     "export": 1,
-    "web_item": 1
+    "web_item": 1,
+    "web_view": 1
   },
   "event_rounds": 10,
   "config_name": "ozx",
@@ -30,5 +31,9 @@
   "extra_check_pet": 0,
   "extra_pet": "trader",
   "extra_check_sombut": 0,
-  "extra_sombut": "laurel Wreath"
+  "extra_sombut": "laurel Wreath",
+  "web_view_id_found": 1,
+  "web_view_backup_id": 0,
+  "id-found": 1,
+  "backup-id": 0
 }

@@ -35,7 +35,8 @@ FIND_EXCLUSIVE = ("maxgacha", "maxpet")
 # ค่า default ที่ GUI จัดการ (นอกจาก steps) — path ต่างๆ ไม่แตะ เก็บไว้ในไฟล์ตามเดิม
 GUI_DEFAULTS = {"event_rounds": 2, "start_wait": 15,
                 "extra_check_pet": 0, "extra_pet": "",
-                "extra_check_sombut": 0, "extra_sombut": ""}
+                "extra_check_sombut": 0, "extra_sombut": "",
+                "web_view_id_found": 1, "web_view_backup_id": 1}
 
 
 def load_config():
@@ -54,13 +55,21 @@ def load_config():
             cfg["extra_pet"] = str(d.get("extra_pet", cfg["extra_pet"]))
             cfg["extra_check_sombut"] = 1 if d.get("extra_check_sombut", cfg["extra_check_sombut"]) else 0
             cfg["extra_sombut"] = str(d.get("extra_sombut", cfg["extra_sombut"]))
+            
+            # support both snake_case and kebab-case and aliases
+            cfg["web_view_id_found"] = 1 if d.get("web_view_id_found", d.get("id-found", cfg["web_view_id_found"])) else 0
+            cfg["web_view_backup_id"] = 1 if d.get("web_view_backup_id", d.get("backup-id", cfg["web_view_backup_id"])) else 0
+            
+            # Sync web_item from web_view step if present
+            if "web_view" in (d.get("steps") or {}):
+                cfg["steps"]["web_item"] = 1 if (d.get("steps") or {}).get("web_view") else 0
     except Exception:
         pass
     return cfg
 
 
 def save_config(managed):
-    """merge ทับเฉพาะ field ที่ GUI จัดการ (steps/event_rounds/start_wait)
+    """merge ทับเฉพาะ field ที่ GUI จัดการ (steps/event_rounds/start_wait/extra/web_view_options)
     เก็บ key อื่นในไฟล์เดิมไว้ (input_dir / output_dir / failed_dir / claim_dir / config_name)"""
     data = {}
     if os.path.exists(CONFIG_FILE):
@@ -139,6 +148,21 @@ class ConfigWindow(ctk.CTkToplevel):
         self.extra_sombut_entry.insert(0, str(cfg["extra_sombut"]))
         self.extra_sombut_entry.pack(anchor="w", padx=20, pady=(2, 8))
 
+        ctk.CTkFrame(self, height=1, fg_color=("gray75", "gray35")).pack(fill="x", padx=16, pady=6)
+
+        # ── web view options ──
+        ctk.CTkLabel(self, text="แหล่งข้อมูลสำหรับ Web View (เว็บสถิติ)", font=("Segoe UI", 12, "bold")).pack(anchor="w", padx=20, pady=(2, 4))
+        
+        self.web_view_id_found_var = ctk.BooleanVar(value=bool(cfg["web_view_id_found"]))
+        ctk.CTkSwitch(self, text="ดึงข้อมูลจาก id-found (ค้นเจอ)",
+                      variable=self.web_view_id_found_var, font=("Segoe UI", 12),
+                      switch_width=40, switch_height=20).pack(anchor="w", padx=20, pady=2)
+                      
+        self.web_view_backup_id_var = ctk.BooleanVar(value=bool(cfg["web_view_backup_id"]))
+        ctk.CTkSwitch(self, text="ดึงข้อมูลจาก backup-id (สุ่มเจอ)",
+                      variable=self.web_view_backup_id_var, font=("Segoe UI", 12),
+                      switch_width=40, switch_height=20).pack(anchor="w", padx=20, pady=(2, 8))
+
         ctk.CTkButton(self, text="💾  บันทึก", font=("Segoe UI", 13, "bold"),
                       height=36, corner_radius=8, command=self._save).pack(pady=(14, 10))
 
@@ -148,7 +172,7 @@ class ConfigWindow(ctk.CTkToplevel):
         """ปรับขนาดหน้าต่างให้พอดีกับ widget อัตโนมัติ (ไม่ต้อง hardcode ความสูง)
         — เพิ่ม/ลบ step แล้วหน้าต่างขยายเองตามจำนวนสวิตช์"""
         self.update_idletasks()
-        w = max(340, self.winfo_reqwidth())
+        w = max(360, self.winfo_reqwidth())
         h = self.winfo_reqheight()
         self.geometry(f"{w}x{h}")
         self.minsize(w, h)
@@ -169,6 +193,9 @@ class ConfigWindow(ctk.CTkToplevel):
 
     def _save(self):
         steps = {k: (1 if v.get() else 0) for k, v in self.step_vars.items()}
+        # save web_view alias as well in steps
+        steps["web_view"] = steps["web_item"]
+        
         try:
             rounds = max(1, int(self.rounds_entry.get()))
         except ValueError:
@@ -185,6 +212,10 @@ class ConfigWindow(ctk.CTkToplevel):
             "extra_pet": self.extra_pet_entry.get().strip(),
             "extra_check_sombut": 1 if self.extra_check_sombut_var.get() else 0,
             "extra_sombut": self.extra_sombut_entry.get().strip(),
+            "web_view_id_found": 1 if self.web_view_id_found_var.get() else 0,
+            "web_view_backup_id": 1 if self.web_view_backup_id_var.get() else 0,
+            "id-found": 1 if self.web_view_id_found_var.get() else 0,
+            "backup-id": 1 if self.web_view_backup_id_var.get() else 0,
         })
         self.destroy()
 

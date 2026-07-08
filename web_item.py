@@ -147,17 +147,37 @@ def _backup_dir():
 
 
 def scan_found():
-    """สแกนไฟล์ .zip ทั้งหมดใน id-found และ backup-id (รวม part-XXXX ย่อย) → dict {key: rec}"""
+    """สแกนไฟล์ .zip ทั้งหมดใน id-found และ/หรือ backup-id (รวม part-XXXX ย่อย) → dict {key: rec}"""
+    web_view_id_found = 1
+    web_view_backup_id = 1
+    try:
+        with open(MAIN_CONFIG, "r", encoding="utf-8") as f:
+            cfg = json.load(f)
+            # เช็ค key alias ก่อน ถ้าไม่มีค่อยใช้ key หลัก
+            if "id-found" in cfg:
+                web_view_id_found = cfg["id-found"]
+            else:
+                web_view_id_found = cfg.get("web_view_id_found", 1)
+
+            if "backup-id" in cfg:
+                web_view_backup_id = cfg["backup-id"]
+            else:
+                web_view_backup_id = cfg.get("web_view_backup_id", 1)
+    except Exception:
+        pass
+
     recs = {}
     bases = []
     # โฟลเดอร์ id-found
-    fd = _found_dir()
-    if os.path.isdir(fd):
-        bases.append(fd)
+    if web_view_id_found:
+        fd = _found_dir()
+        if os.path.isdir(fd):
+            bases.append(fd)
     # โฟลเดอร์ backup-id
-    bd = _backup_dir()
-    if os.path.isdir(bd):
-        bases.append(bd)
+    if web_view_backup_id:
+        bd = _backup_dir()
+        if os.path.isdir(bd):
+            bases.append(bd)
 
     for base in bases:
         for root, _dirs, files in os.walk(base):
@@ -200,6 +220,38 @@ def record(out_name, out_dir=""):
     names, member = parse_name(out_name)
     if not names:
         return False
+
+    web_view_id_found = 1
+    web_view_backup_id = 1
+    try:
+        with open(MAIN_CONFIG, "r", encoding="utf-8") as f:
+            cfg = json.load(f)
+            # เช็ค key alias ก่อน ถ้าไม่มีค่อยใช้ key หลัก
+            if "id-found" in cfg:
+                web_view_id_found = cfg["id-found"]
+            else:
+                web_view_id_found = cfg.get("web_view_id_found", 1)
+
+            if "backup-id" in cfg:
+                web_view_backup_id = cfg["backup-id"]
+            else:
+                web_view_backup_id = cfg.get("web_view_backup_id", 1)
+    except Exception:
+        pass
+
+    # เช็คว่าเราเปิดบันทึกโฟลเดอร์นี้ลงเว็บไหม
+    fd_name = os.path.basename(_found_dir())
+    bd_name = os.path.basename(_backup_dir())
+    
+    current_dir_name = os.path.basename(str(out_dir))
+    if current_dir_name.startswith("part-"):
+        current_dir_name = os.path.basename(os.path.dirname(str(out_dir)))
+
+    if current_dir_name == fd_name and not web_view_id_found:
+        return False
+    if current_dir_name == bd_name and not web_view_backup_id:
+        return False
+
     names = _order_names(names)
     key = member or f"_noid_{_set_key(names)}"
     with _LOCK:
