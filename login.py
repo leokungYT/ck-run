@@ -523,7 +523,7 @@ def wait_event_checkpoint(device):
         if M.ImgSearchADB(img, M.img_path(LOGIN_FAILED_IMG)):
             raise LoginFailed()
         if M.ImgSearchADB(img, path):
-            M.log(serial, "เจอ checkpoint event → เริ่ม EVENT LOOP", Fore.GREEN)
+            M.log(serial, "เจอ checkpoint event", Fore.GREEN)
             return True
         time.sleep(0.3)
 
@@ -1655,12 +1655,15 @@ def process_account(device, serial, zpath):
         # 2.5) เช็คว่าเกมเข้าจริงไหม — เด้ง/ปิด/ไม่ขึ้นหน้าจอ → start ใหม่ (แทน sleep คงที่เดิม)
         ensure_game_entered(device)
 
-        # 3) event loops — รอ checkpoint event ให้เจอก่อน ค่อยเริ่ม EVENT LOOP
+        # รอ checkpoint event ให้เจอก่อนเริ่มทำงาน (ต้องเจอเสมอห้ามข้ามไปทำงานอื่น)
+        if not wait_event_checkpoint(device):
+            if not M.bot_running:
+                return False
+            raise LoginFailed()
+
+        # 3) event loops
         if step_on("event"):
-            if wait_event_checkpoint(device):
-                run_event_loops(device)
-            else:
-                raise LoginFailed()
+            run_event_loops(device)
         M.log(serial, "login เสร็จ → ทำ config เพิ่ม (box / maxgacha)", Fore.CYAN)
 
         # 3.5) box — box1 → box2 → box3 (ไม่เจอ 15 วิ → กด box5 แล้วจบ) → box4-5 (ถ้า box=1)
