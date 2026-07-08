@@ -12,7 +12,7 @@
     "export": 1,
     "web_item": 1
   },
-  "event_rounds": 5,
+  "event_rounds": 10,
   "config_name": "ozx",
   "input_dir": "input-id",
   "output_dir": "login-success",

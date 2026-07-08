@@ -199,11 +199,13 @@ class App(ctk.CTk):
         ctk.set_default_color_theme("blue")
 
         self.title("🍪 Cookie Run - Login")
-        self.geometry("300x190")
+        self.geometry("320x255")
         self.resizable(False, False)
 
         self._bot_thread = None
         self._running = False
+        self._run_start_ts = None   # เวลาเริ่มรัน (คิดเฉลี่ยต่อ id ตั้งแต่ตรงนี้)
+        self._run_end_ts = None     # เวลาที่งานจบ (freeze เวลา ไม่ให้เฉลี่ยเพี้ยนหลังหยุด)
 
         ctk.CTkLabel(self, text="Cookie Run - Login", font=("Segoe UI", 16, "bold")).pack(pady=(16, 10))
 
@@ -229,6 +231,17 @@ class App(ctk.CTk):
                                    font=("Segoe UI", 11), text_color=("gray50", "gray60"))
         self.status.pack()
 
+        # ── เวลาเฉลี่ยต่อ id (เปิด/ปิดแสดงได้) ──
+        self.show_avg_var = ctk.BooleanVar(value=True)
+        ctk.CTkSwitch(self, text="แสดงเวลาเฉลี่ย/id", variable=self.show_avg_var,
+                      font=("Segoe UI", 11), switch_width=36, switch_height=18,
+                      command=self._refresh_avg_visibility).pack(pady=(8, 0))
+        self.avg_label = ctk.CTkLabel(self, text="⏱ เฉลี่ย — (ยังไม่เริ่ม)",
+                                      font=("Segoe UI", 12, "bold"),
+                                      text_color=("#2f7bf6", "#5b9bff"))
+        self.avg_label.pack(pady=(2, 6))
+        self._update_avg()   # เริ่ม loop อัปเดตเวลาเฉลี่ยทุก 1 วิ
+
         self.protocol("WM_DELETE_WINDOW", self._on_close)
 
     # ── bot control ──
@@ -240,6 +253,8 @@ class App(ctk.CTk):
 
     def _start_bot(self):
         self._running = True
+        self._run_start_ts = time.time()   # เริ่มจับเวลาเฉลี่ยต่อ id ตั้งแต่กด Start
+        self._run_end_ts = None
         self.start_btn.configure(text="⏹  Stop", fg_color="#e74c3c", hover_color="#c0392b")
         self.status.configure(text="กำลังเริ่ม...", text_color=("#2ecc71", "#2ecc71"))
 
@@ -317,6 +332,47 @@ class App(ctk.CTk):
 
     def _show_status(self, text, color):
         self.status.configure(text=text, text_color=(color, color))
+
+    # ── เวลาเฉลี่ยต่อ id ──
+    @staticmethod
+    def _fmt_dur(sec):
+        sec = int(sec)
+        h, rem = divmod(sec, 3600)
+        m, s = divmod(rem, 60)
+        if h:
+            return f"{h}ชม {m}น"
+        if m:
+            return f"{m}น {s}วิ"
+        return f"{s}วิ"
+
+    def _refresh_avg_visibility(self):
+        if self.show_avg_var.get():
+            if not self.avg_label.winfo_ismapped():
+                self.avg_label.pack(pady=(2, 6))
+        else:
+            self.avg_label.pack_forget()
+
+    def _update_avg(self):
+        """คำนวณเวลาเฉลี่ยต่อ id (เวลาที่ใช้ทั้งหมด ÷ จำนวน id ที่ทำเสร็จ) — วนอัปเดตทุก 1 วิ"""
+        try:
+            if self.show_avg_var.get() and self._run_start_ts:
+                # จบงานแล้ว → freeze เวลา (ไม่งั้น elapsed โตเรื่อยๆ ทำให้เฉลี่ยเพี้ยน)
+                if not self._running and self._run_end_ts is None:
+                    self._run_end_ts = time.time()
+                end = self._run_end_ts if (not self._running and self._run_end_ts) else time.time()
+                elapsed = end - self._run_start_ts
+                import login as LG
+                processed = LG.STATS.get("done", 0) + LG.STATS.get("fail", 0)
+                if processed > 0:
+                    per_min = (elapsed / processed) / 60.0
+                    self.avg_label.configure(
+                        text=f"⏱ เฉลี่ย {per_min:.2f} นาที/id  ({processed} id | รวม {self._fmt_dur(elapsed)})")
+                else:
+                    self.avg_label.configure(
+                        text=f"⏱ เฉลี่ย — (ยังไม่จบ id แรก | {self._fmt_dur(elapsed)})")
+        except Exception:
+            pass
+        self.after(1000, self._update_avg)
 
     def _open_config(self):
         ConfigWindow(self)

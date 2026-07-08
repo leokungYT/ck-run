@@ -494,7 +494,7 @@ def handle_repeating(device, name, appear_timeout=C.APPEAR_TIMEOUT, absent_secs=
     seen = False
     while time.time() - start < appear_timeout:
         if not bot_running:
-            return
+            return seen
         img = fast_screencap(device)
         pts = ImgSearchADB(img, path)
         if pts:
@@ -506,13 +506,13 @@ def handle_repeating(device, name, appear_timeout=C.APPEAR_TIMEOUT, absent_secs=
         time.sleep(0.3)
     if not seen:
         log(device.serial, f"ไม่เจอ {name} ใน {appear_timeout}s — ข้าม", Fore.YELLOW)
-        return
+        return False   # ไม่เจอรูปนี้เลย
 
     # 2) กดรัวๆ จนหายครบ absent_secs
     last_seen = time.time()
     while time.time() - last_seen < absent_secs:
         if not bot_running:
-            return
+            return True
         img = fast_screencap(device)
         pts = ImgSearchADB(img, path)
         if pts:
@@ -521,6 +521,7 @@ def handle_repeating(device, name, appear_timeout=C.APPEAR_TIMEOUT, absent_secs=
             last_seen = time.time()
         time.sleep(0.4)
     log(device.serial, f"{name} หายครบ {absent_secs}s → ไปต่อ")
+    return True   # เจอ + จัดการรูปนี้แล้ว
 
 
 # ═══════════════════════════════════════════════════════════════════

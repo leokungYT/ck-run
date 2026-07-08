@@ -865,6 +865,7 @@ MAX_FIXSPACE_ABORT = 2   # เจอ "Not enough space!" ติดกันก�
 _mg_diskfull_locks = {}                # per-device lock (serial->Lock): กันเคลียร์ disk-full ซ้อน watchdog vs main thread 'เครื่องเดียวกัน'
 _mg_fixspace_locks = {}                # per-device lock: กันเคลียร์ fix-space ซ้อน watchdog vs main thread
 _mg_last_fixspace = {}                 # serial -> เวลา (epoch) ที่เคลียร์ fix-space ครั้งล่าสุด (main/watchdog ใครก็ได้)
+_mg_last_diskfull = {}                 # serial -> เวลา (epoch) ที่เจอ disk-full ครั้งล่าสุด (ดิสก์เต็มเหมือน fix-space)
 _mg_locks_guard = threading.Lock()     # กัน race ตอนสร้าง lock ใหม่ใน dict
 
 
@@ -915,28 +916,30 @@ def _mg_click_when_held(device, name, hold=5, timeout=30, post_delay=0.35):
     return False
 
 
-def _mg_disk_full(device, timeout=5):
-    """แวะหา disk-full1 (timeout วิ) ไม่เจอข้าม; เจอ → disk-full2 → disk-full3 → fixdisk1 (ค้างครบ 10วิ ค่อยกด) → fixdisk2
+def _mg_disk_full(device, timeout=3):
+    """แวะหา disk-full1 (timeout วิ) ไม่เจอข้าม; เจอ → disk-full2 → disk-full3 → fixdisk1 (ค้างครบ 3วิ ค่อยกด) → fixdisk2
     ใช้ lock (ต่อเครื่อง) non-blocking: ถ้าอีก thread ของเครื่องเดียวกันกำลังเคลียร์อยู่ → ข้าม (กันกดซ้อน)"""
     lock = _mg_dev_lock(_mg_diskfull_locks, device.serial)
     if not lock.acquire(blocking=False):
         return
     try:
         if _mg_click(device, "disk-full1.bmp", timeout=timeout):
-            _mg_click(device, "disk-full2.bmp", timeout=10)
-            _mg_click(device, "disk-full3.bmp", timeout=10)
-            # แก้ หลังจากกดdisk-full3 ให้มันกด draw-agin.bmpอีกรอบ หา 10sว่าเจอไหมไม่เจอtimeout
-            _mg_click(device, "draw-agin.bmp", timeout=10)
-            
+            _mg_last_diskfull[device.serial] = time.time()   # mark: เจอ disk-full = ดิสก์เต็ม (ให้ maxgacha นับ)
+            _mg_click(device, "disk-full2.bmp", timeout=5)
+            _mg_click(device, "disk-full3.bmp", timeout=5)
+            # แก้ หลังจากกดdisk-full3 ให้มันกด draw-agin.bmpอีกรอบ (ไม่เจอใน 3s ข้าม)
+            _mg_click(device, "draw-agin.bmp", timeout=3)
+
             # ถ้าเจอ stop-step2 หรือ stop-ruby ให้ข้ามการหา fixdisk ทันที เพื่อประหยัดเวลา
             img_chk = M.fast_screencap(device)
             if M.ImgSearchADB(img_chk, M.img_path("stop-step2.bmp", MAXGACHA_DIR)) or \
                M.ImgSearchADB(img_chk, M.img_path("stop-ruby.bmp", MAXGACHA_DIR)):
                 M.log(device.serial, "เจอ stop-step2/stop-ruby ใน disk-full → ข้าม fixdisk", Fore.YELLOW)
                 return
-                
-            _mg_click_when_held(device, "fixdisk1.bmp", hold=10, timeout=40)
-            _mg_click(device, "fixdisk2.bmp", timeout=10)
+
+            # fixdisk1: รอค้างครบ 3s แล้วกด — ไม่โผล่ใน 6s ข้ามเลย (เดิม 10s/40s อืดมาก)
+            _mg_click_when_held(device, "fixdisk1.bmp", hold=3, timeout=6)
+            _mg_click(device, "fixdisk2.bmp", timeout=5)
     finally:
         lock.release()
 
@@ -1263,10 +1266,11 @@ def _mg_step2(device, found=None, absent=1):
 
     while M.bot_running:
         M.log(serial, "=== STEP2 ===", Fore.GREEN)
-        if not _mg_click(device, "get-random25.bmp", timeout=8):
+        _mg_click(device, "cancel-step2v2.bmp", timeout=CANCEL_TIMEOUT)   # กด cancel-step2v2 ก่อน แล้วค่อยหา get-random25
+        if not _mg_click(device, "get-random25.bmp", timeout=4):
             M.log(serial, "ไม่เจอ get-random25 → กด fix-random25 แล้วหา get-random25 ใหม่", Fore.YELLOW)
-            _mg_click(device, "fix-random25.bmp", timeout=5)
-            if not _mg_click(device, "get-random25.bmp", timeout=8):
+            _mg_click(device, "fix-random25.bmp", timeout=3)
+            if not _mg_click(device, "get-random25.bmp", timeout=4):
                 M.log(serial, "⚠️ ยังไม่เจอ get-random25 หลัง fix-random25 (หน้า step2 อาจยังไม่เปิด)", Fore.YELLOW)
         _mg_click(device, "fixmaxgacha.bmp", timeout=2)
         # disk-full ให้ watchdog เคลียร์ให้ (ไม่ต้องรอ disk-full1 5วิ ทุกรอบ)
@@ -1409,21 +1413,24 @@ def _run_maxgacha_body(device, found):
             break
 
         # หา maxgacha4 หรือ maxgacha4fix — ถ้าไม่เจอทั้งคู่ ข้ามรอบนี้ (ไม่ทำ step ที่เหลือ เพราะหน้าจอไม่ถูก)
-        clicked_mg4 = _mg_click(device, "maxgacha4.bmp", timeout=8)
+        clicked_mg4 = _mg_click(device, "maxgacha4.bmp", timeout=5)
         if not clicked_mg4:
-            clicked_mg4 = _mg_click(device, "maxgacha4fix.bmp", timeout=8)  # ลดราคา → ใช้รูปอีกแบบ
+            clicked_mg4 = _mg_click(device, "maxgacha4fix.bmp", timeout=5)  # ลดราคา → ใช้รูปอีกแบบ
         if not clicked_mg4:
             M.log(serial, "ไม่เจอ maxgacha4 / maxgacha4fix → ข้ามรอบนี้", Fore.YELLOW)
             continue   # ข้ามไปรอบถัดไป (ไม่ทำ fix-space/disk-full/maxgacha5/draw-again โดยไม่มีของ)
 
         # หลังกด maxgacha4 → หา fix-space1 3วิ ถ้าเจอ → เคลียร์ fix-space2→6 ให้จบก่อน ค่อยทำงานตามปกติ
-        # นับว่ารอบนี้เจอ Not-enough-space ไหม — เผื่อ watchdog เคลียร์ตัดหน้า main ไม่ทันเห็น → เช็ค timestamp ด้วย
+        # นับว่ารอบนี้ "ดิสก์เต็ม" ไหม — เจอ fix-space (Not enough space) หรือ disk-full อย่างใดอย่างหนึ่งก็นับ
+        # (เผื่อ watchdog เคลียร์ตัดหน้า main ไม่ทันเห็น → เช็ค timestamp ทั้งสองตัวด้วย)
         hit = _mg_fix_space_check(device, timeout=3)
         if not hit and _mg_last_fixspace.get(serial, 0) >= round_start:
             hit = True
+        if not hit and _mg_last_diskfull.get(serial, 0) >= round_start:
+            hit = True   # disk-full = ดิสก์เต็มเหมือนกัน → นับเข้า abort ด้วย
         if hit:
             fixspace_hits += 1
-            M.log(serial, f"⚠️ Not-enough-space (ดิสก์เต็ม) รอบที่ {fixspace_hits}/{MAX_FIXSPACE_ABORT}", Fore.YELLOW)
+            M.log(serial, f"⚠️ ดิสก์เต็ม (fix-space/disk-full) รอบที่ {fixspace_hits}/{MAX_FIXSPACE_ABORT}", Fore.YELLOW)
             if fixspace_hits >= MAX_FIXSPACE_ABORT:
                 # ดิสก์เต็มซ้ำ = สุ่มของไม่ได้แน่ → เลิก maxgacha ทั้ง step (ข้าม step2) ไป export เลย
                 M.log(serial, f"❌ ดิสก์เต็มซ้ำ {fixspace_hits} รอบ → เลิก maxgacha (สุ่มไม่ได้) ข้ามไป export", Fore.RED)
