@@ -516,8 +516,7 @@ def wait_event_checkpoint(device):
     serial = device.serial
     path = M.img_path(EVENT_CHECKPOINT)
     M.log(serial, f"รอ checkpoint event ({EVENT_CHECKPOINT})...", Fore.CYAN)
-    start = time.time()
-    while time.time() - start < EVENT_CHECKPOINT_TIMEOUT:
+    while True:
         if not M.bot_running:
             return False
         img = M.fast_screencap(device)
@@ -527,8 +526,6 @@ def wait_event_checkpoint(device):
             M.log(serial, "เจอ checkpoint event → เริ่ม EVENT LOOP", Fore.GREEN)
             return True
         time.sleep(0.3)
-    M.log(serial, f"ไม่เจอ checkpoint event ใน {EVENT_CHECKPOINT_TIMEOUT}s", Fore.RED)
-    return False
 
 
 def run_event_loops(device):
