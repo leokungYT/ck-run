@@ -451,7 +451,7 @@ def run_maxpet(device, found):
 #   จึงต้องส่ง appear_timeout ตรงๆ ที่นี่)
 # ═══════════════════════════════════════════════════════════════════════
 EVENT_APPEAR_TIMEOUT = 3   # รอรูป event โผล่ครั้งแรกกี่วิ (ไม่โผล่ → ข้าม)
-EVENT_NAMES = ("event-back.bmp", "git-item.bmp", "fix-daliy.png", "ok-gifitem.bmp", "fixnews.bmp")
+EVENT_NAMES = ("event-back.bmp", "git-item.bmp", "fix-daliy.png", "ok-gifitem.bmp", "fixnews.bmp", "fixsp1.bmp")
 
 EVENT_CHECKPOINT = "check-pointevent.bmp"   # รูป checkpoint ก่อนเข้าหน้า event
 EVENT_CHECKPOINT_FIX = "fixcheck-pointevent.bmp" # รูป checkpoint event รุ่นสำรอง/แก้ไข
