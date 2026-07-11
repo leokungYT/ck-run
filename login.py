@@ -66,7 +66,7 @@ LOGIN_CONFIG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "co
 DEFAULTS = {
     "steps": {"clean": 1, "restore": 1, "event": 1, "find": 0, "find_treasure": 0, "box": 1,
               "check_ruby": 0, "maxgacha": 1, "maxpet": 1, "export": 1, "web_item": 1, "web_view": 1,
-              "link_devid": 0},
+              "link_devid": 0, "login_new": 0},
     "event_rounds": C.EVENT_LOOP_ROUNDS,
     "config_name": C.CUSTOM_CONFIG_NAME,
     "input_dir": "input-id",
@@ -769,6 +769,131 @@ def run_link_devid(device, base, zpath):
     txt = _write_devid_txt(base, email, password)
     M.log(serial, f"✅ link-devid เสร็จ → {txt}", Fore.GREEN)
     return email, password
+
+
+# ═══════════════════════════════════════════════════════════════════════
+#  STEP: login-new — login บัญชีที่ผูก Google ไว้แล้ว ด้วย credential จากไฟล์ .txt
+#  (เปิดด้วย steps.login-new = 1) → input เป็นไฟล์ .txt (-email/password) ไม่ใช่ .zip
+#  flow: clean (ลบไฟล์บัญชีเดิม) → start → play1 → กดตำแหน่ง → play2-4
+#        → newlogin → loginnew1 → กรอก email → loginnew2 → loginnew3 → กรอก password → loginnew4
+#        → fixplay1-4 → (รอ check-pointevent +delay8s + event loop = ใช้ร่วม flow เดิม)
+#        → ทำ step เดิมต่อ (ถ้าเปิด) → export: เขียน .txt ชื่อ+เนื้อหาเดิม ลง login-success
+#  ⚠️ รูป: play1-4 อยู่ img/ (root) | loginnew1-4, fixplay1-4 อยู่ img/devid/ (.bmp)
+# ═══════════════════════════════════════════════════════════════════════
+LOGINNEW_DIR = "img/devid"        # loginnew1-4 / fixplay1-4 อยู่ใน img/devid/ (play1-4 อยู่ img/ root)
+LOGINNEW_PLAY1_POS = (419, 282)   # ตำแหน่งที่กดหลัง play1 (เหมือน main.run_play_sequence)
+LOGINNEW_STEP_DELAY = 0.6
+
+
+def _read_cred_text(path):
+    """อ่านข้อความ credential จาก input: .txt อ่านตรงๆ | .zip หา .txt ตัวแรกข้างในมาอ่าน"""
+    if path.lower().endswith(".zip"):
+        try:
+            with zipfile.ZipFile(path) as zf:
+                for n in zf.namelist():
+                    if n.lower().endswith(".txt"):
+                        return zf.read(n).decode("utf-8", "ignore")
+        except Exception:
+            pass
+        return ""
+    try:
+        with open(path, "r", encoding="utf-8", errors="ignore") as f:
+            return f.read()
+    except Exception:
+        return ""
+
+
+def _parse_login_new_creds(path):
+    """อ่าน credential รูปแบบ -<email>/<password> จาก .txt หรือ .zip → คืน (email, password) | (None, None)"""
+    line = _read_cred_text(path).strip()
+    line = line.lstrip("-").strip()   # ตัด - นำหน้า
+    if "/" not in line:
+        return None, None
+    email, password = line.split("/", 1)   # แยกที่ / ตัวแรก (กันเผื่อ password มี / )
+    email, password = email.strip(), password.strip()
+    return (email, password) if (email and password) else (None, None)
+
+
+def _click_until_gone(device, name, folder, absent=1.0, first_wait=5.0, max_secs=20, post_delay=0.3):
+    """กด name (ในโฟลเดอร์ folder) รัวๆ จน 'หายจากจอ' ติดต่อกัน absent วิ → คืน True
+    ไม่เจอเลยใน first_wait วิแรก → คืน False (ข้ามไป) | ชน max_secs → หยุด"""
+    path = M.img_path(name, folder)
+    start = time.time()
+    last_seen = None
+    while M.bot_running and time.time() - start < max_secs:
+        pts = M.ImgSearchADB(M.fast_screencap(device), path)
+        if pts:
+            M.tap(device, *pts[0])
+            M.log(device.serial, f"กด {name} ที่ {pts[0]}", Fore.CYAN)
+            last_seen = time.time()
+            time.sleep(post_delay)
+            continue
+        if last_seen is None:
+            if time.time() - start >= first_wait:
+                return False              # ยังไม่เคยเจอปุ่มนี้ → ข้าม
+        elif time.time() - last_seen >= absent:
+            return True                   # เคยเจอแล้วหายครบ absent วิ → จบ
+        time.sleep(0.3)
+    return last_seen is not None
+
+
+def run_login_new(device, zpath):
+    """step2 ของ login-new: play + กรอก email/password จาก .txt + fixplay
+    คืน (email, password) | None ถ้าอ่าน credential ไม่ได้/ถูกหยุด"""
+    serial = device.serial
+    M.log(serial, "=== LOGIN-NEW ===", Fore.GREEN)
+
+    email, password = _parse_login_new_creds(zpath)
+    if not email or not password:
+        M.log(serial, f"⚠️ อ่าน credential จาก {os.path.basename(zpath)} ไม่ได้ (ต้องเป็น -email/password)", Fore.RED)
+        return None
+    M.log(serial, f"credential: {email} / {password}", Fore.CYAN)
+
+    # play1 → กดตำแหน่ง → play2 → play3 → play4
+    M.wait_and_click(device, "play1.bmp", required=False, post_delay=1.5)
+    px, py = LOGINNEW_PLAY1_POS
+    M.log(serial, f"กดตำแหน่ง ({px},{py}) หลัง play1", Fore.CYAN)
+    M.tap(device, px, py)
+    time.sleep(1.5)
+    for i in range(2, 5):
+        if not M.bot_running:
+            return None
+        M.wait_and_click(device, f"play{i}.bmp", required=False, post_delay=1.0)
+
+    # กด newlogin 'ซ้ำๆ จนหายจากจอ' ก่อน แล้วค่อยเข้า loginnew1 (รูปอยู่ img/devid/)
+    _click_until_gone(device, "newlogin.bmp", LOGINNEW_DIR)
+
+    # loginnew1 → กรอก email → loginnew2 → loginnew3 → กรอก password → loginnew4 (รูปอยู่ img/devid/)
+    M.wait_and_click(device, "loginnew1.bmp", folder=LOGINNEW_DIR, required=False, post_delay=LOGINNEW_STEP_DELAY)
+    device.shell(f"input text '{email}'")
+    time.sleep(LOGINNEW_STEP_DELAY)
+    M.wait_and_click(device, "loginnew2.bmp", folder=LOGINNEW_DIR, required=False, post_delay=LOGINNEW_STEP_DELAY)
+    M.wait_and_click(device, "loginnew3.bmp", folder=LOGINNEW_DIR, required=False, post_delay=LOGINNEW_STEP_DELAY)
+    device.shell(f"input text '{password}'")
+    time.sleep(LOGINNEW_STEP_DELAY)
+    M.wait_and_click(device, "loginnew4.bmp", folder=LOGINNEW_DIR, required=False, post_delay=LOGINNEW_STEP_DELAY)
+
+    # fixplay1 → fixplay4 (รูปอยู่ img/devid/)
+    for i in range(1, 5):
+        if not M.bot_running:
+            return None
+        M.wait_and_click(device, f"fixplay{i}.bmp", folder=LOGINNEW_DIR, required=False, post_delay=LOGINNEW_STEP_DELAY)
+
+    return email, password
+
+
+def _export_login_new_txt(base, out_dir, email, password):
+    """เขียนไฟล์ <base>.txt เก็บ credential -<email>/<password> ลง out_dir กันชื่อชน _2, _3, ...
+    (input จะเป็น .txt หรือ .zip ก็ได้ — output เป็น .txt ฟอร์แมตเดียวกันเสมอ)"""
+    os.makedirs(out_dir, exist_ok=True)
+    path = os.path.join(out_dir, f"{base}.txt")
+    i = 2
+    while os.path.exists(path):
+        path = os.path.join(out_dir, f"{base}_{i}.txt")
+        i += 1
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(f"-{email}/{password}\n")
+    return path
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -1856,8 +1981,17 @@ def process_account(device, serial, zpath):
     base = _strip_ruby_brackets(base)   # ล้าง [ruby] เก่าทิ้งก่อน (กันสะสม) — เหลือแค่ชื่อ + [ID]
     M.log(serial, f"┌─ เริ่มบัญชี: {name}", Fore.MAGENTA)
 
-    # 1) restore (เปิด root ตลอดช่วง push แล้วค่อยปิด)
-    if step_on("restore"):
+    # 1) restore / clean
+    if step_on("login_new"):
+        # login-new step1: ลบไฟล์บัญชีเดิม (clean) — input เป็น .txt ไม่มี zip ให้ push
+        M.log(serial, "login-new: ลบไฟล์บัญชีเดิมก่อน login ใหม่", Fore.CYAN)
+        device = M.enable_root(device)
+        device.shell(f"am force-stop {C.PACKAGE}")
+        time.sleep(1)
+        M.delete_account_files(device)
+        device = M.disable_root(device)
+    elif step_on("restore"):
+        # restore (เปิด root ตลอดช่วง push แล้วค่อยปิด)
         device = M.enable_root(device)
         ok = restore_account(device, serial, zpath)
         device = M.disable_root(device)
@@ -1878,18 +2012,28 @@ def process_account(device, serial, zpath):
 
     found = set()
     ruby = None
+    login_new_creds = None
     try:
         _raise_if_login_failed(device)   # เจอ login-failed ตั้งแต่หลัง start → ยกเลิก
 
         # 2.5) เช็คว่าเกมเข้าจริงไหม — เด้ง/ปิด/ไม่ขึ้นหน้าจอ → start ใหม่ (แทน sleep คงที่เดิม)
         ensure_game_entered(device)
 
-        # 2.6) login checkpoint — กด play8 ซ้ำๆ จนเจอ checkpointlogin (เข้า login จริง)
-        #      กันอาการ play8 หายแล้วเลิกกด → ค้างรอ checkpointlogin ไม่มาสักที
-        if not wait_login_checkpoint(device):
-            if not M.bot_running:
-                return False
-            raise LoginFailed()
+        # 2.6) login sequence
+        if step_on("login_new"):
+            # login-new step2: play + กรอก email/password จาก .txt/.zip + fixplay
+            login_new_creds = run_login_new(device, zpath)
+            if login_new_creds is None:
+                if not M.bot_running:
+                    return False
+                raise LoginFailed()   # อ่าน credential ไม่ได้ → ถือว่า login พัง
+        else:
+            # login checkpoint — กด play8 ซ้ำๆ จนเจอ checkpointlogin (เข้า login จริง)
+            #  กันอาการ play8 หายแล้วเลิกกด → ค้างรอ checkpointlogin ไม่มาสักที
+            if not wait_login_checkpoint(device):
+                if not M.bot_running:
+                    return False
+                raise LoginFailed()
 
         # รอ checkpoint event ให้เจอก่อนเริ่มทำงาน (ต้องเจอเสมอห้ามข้ามไปทำงานอื่น)
         if not wait_event_checkpoint(device):
@@ -1903,7 +2047,7 @@ def process_account(device, serial, zpath):
 
         # 3.1) link-devid — ทำ "หลัง event loop เสร็จ" → ผูก dev id + สุ่ม email/pw → เขียน .txt → clear app
         #       แล้วจบบัญชีเลย (ข้าม box/find/maxgacha/maxpet/export)
-        if step_on("link_devid"):
+        if step_on("link_devid") and not step_on("login_new"):
             run_link_devid(device, os.path.splitext(name)[0], zpath)
             M.close_app(device)          # clear app หลังเขียน .txt เสร็จ
             M.log(serial, f"└─ เสร็จบัญชี (link-devid): {name}", Fore.GREEN)
@@ -1937,6 +2081,11 @@ def process_account(device, serial, zpath):
         if step_on("maxpet"):
             run_maxpet(device, found)
     except LoginFailed:
+        if step_on("login_new"):
+            # login-new: login พัง → clear app แล้วให้ worker ย้าย .txt เข้า failed (ไม่ zip)
+            M.log(serial, "⚠️ login-new: login-failed → เก็บ .txt เข้า failed", Fore.RED)
+            M.close_app(device)
+            return False
         handle_login_failed(device, serial, base)
         return True
     finally:
@@ -1946,6 +2095,15 @@ def process_account(device, serial, zpath):
     # 7) export — ตัดสินชื่อ/ปลายทาง (ทำหลัง step2 → ไม่ clear app ก่อนถึง step2)
     #    maxgacha: เจอ item → backup-id (ชื่อ = item + เดิม) | สุ่มไม่ได้อะไรเลย → random-Fail (ชื่อเดิม)
     #    ไม่งั้น → กติกา trader (decide_login_export)
+    if step_on("login_new"):
+        # login-new export: เขียน .txt ชื่อเดิม + credential เดิม → login-success/ แล้วจบ
+        M.close_app(device)
+        out_dir = _shard_dir(LOGIN["output_dir"])   # login-success
+        email, password = login_new_creds if login_new_creds else (None, None)
+        txt = _export_login_new_txt(os.path.splitext(name)[0], out_dir, email, password)
+        M.log(serial, f"✅ login-new → {txt}", Fore.GREEN)
+        M.log(serial, f"└─ เสร็จบัญชี (login-new): {name}", Fore.GREEN)
+        return True
     if step_on("export"):
         if step_on("find") or step_on("find_treasure"):
             # find-treasure (ก่อน) + find-pet — รีชื่อก่อน export กันชื่อยาวสะสม:
@@ -2033,8 +2191,21 @@ def claim_dir_for(serial):
     return d
 
 
-def claim_next_zip(input_dir, my_claim, stale_after=30):
-    """หยิบ zip ตัวถัดไปแบบ atomic — คืน path ใหม่ใน my_claim หรือ None ถ้าไม่มีเหลือ
+def _input_exts():
+    """นามสกุลไฟล์ input ที่รับ: login-new = .txt + .zip (credential -email/pass) | โหมดอื่น = .zip (บัญชี)"""
+    return (".txt", ".zip") if step_on("login_new") else (".zip",)
+
+
+def _glob_inputs(folder, exts):
+    """glob ไฟล์ทุกนามสกุลใน exts จาก folder (เรียงแล้ว)"""
+    out = []
+    for e in exts:
+        out += glob.glob(os.path.join(folder, "*" + e))
+    return sorted(out)
+
+
+def claim_next_zip(input_dir, my_claim, exts=(".zip",), stale_after=30):
+    """หยิบไฟล์ input (นามสกุลใน exts) ตัวถัดไปแบบ atomic — คืน path ใหม่ใน my_claim หรือ None ถ้าไม่มีเหลือ
 
     ตัวตัดสินว่าใครได้ไฟล์ = lock file สร้างด้วย os.open(O_CREAT|O_EXCL):
       - O_EXCL = CREATE_NEW บน Windows → atomic จริง (ทดสอบแล้ว)
@@ -2049,7 +2220,7 @@ def claim_next_zip(input_dir, my_claim, stale_after=30):
         found_any = False
         # os.scandir แบบ lazy: หยุดทันทีที่ claim ไฟล์แรกได้ (ไม่ต้องสแกน/เรียงครบทุกไฟล์)
         for entry in os.scandir(input_dir):
-            if not entry.name.endswith(".zip") or not entry.is_file():
+            if not entry.name.endswith(exts) or not entry.is_file():
                 continue
             found_any = True
             lock = os.path.join(lock_dir, entry.name + ".lock")
@@ -2096,13 +2267,14 @@ def _worker_loop(serial, input_dir):
         load_login_config()
 
         # 1) เก็บงานค้างของ "เครื่องตัวเอง" ก่อน (เผื่อรอบก่อน crash ค้างใน _processing)
-        leftovers = sorted(glob.glob(os.path.join(my_claim, "*.zip")))
+        exts = _input_exts()   # login-new = .txt + .zip | โหมดอื่น = .zip
+        leftovers = _glob_inputs(my_claim, exts)
         if leftovers:
             zpath = leftovers[0]
             M.log(serial, f"เจองานค้างของเครื่องนี้ → ทำต่อ: {os.path.basename(zpath)}", Fore.YELLOW)
         else:
             # 2) claim ไฟล์ใหม่จาก input-id แบบ atomic (กันเครื่อง/โปรเซสอื่นแย่ง)
-            zpath = claim_next_zip(input_dir, my_claim)
+            zpath = claim_next_zip(input_dir, my_claim, exts=exts)
             if zpath is None:
                 break
             M.log(serial, f"claim: {os.path.basename(zpath)}", Fore.CYAN)
@@ -2251,9 +2423,11 @@ def main():
     os.makedirs(input_dir, exist_ok=True)
     os.makedirs(LOGIN["claim_dir"], exist_ok=True)
 
-    # นับงานที่ค้างทั้งหมด: ยังไม่ claim (input-id/*.zip) + ที่ claim ค้างไว้ (_processing/*/*.zip)
-    pending = (glob.glob(os.path.join(input_dir, "*.zip"))
-               + glob.glob(os.path.join(LOGIN["claim_dir"], "*", "*.zip")))
+    # นับงานที่ค้างทั้งหมด: ยังไม่ claim (input-id/*) + ที่ claim ค้างไว้ (_processing/*/*)
+    exts = _input_exts()   # login-new = .txt + .zip | โหมดอื่น = .zip
+    pending = _glob_inputs(input_dir, exts)
+    for sub in glob.glob(os.path.join(LOGIN["claim_dir"], "*")):
+        pending += _glob_inputs(sub, exts)
     if not pending:
         print(f"{Fore.RED}[ERROR] ไม่มี .zip ใน {input_dir}/ → วางไฟล์บัญชีก่อน{Style.RESET_ALL}")
         return

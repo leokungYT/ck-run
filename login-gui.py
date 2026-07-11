@@ -15,7 +15,7 @@ CONFIG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config-m
 DEFAULT_STEPS = {
     "clean": 1, "restore": 1, "event": 1, "find": 0, "find_treasure": 0, "box": 1,
     "check_ruby": 0, "maxgacha": 1, "maxpet": 1, "export": 1, "web_item": 1,
-    "link_devid": 0,
+    "link_devid": 0, "login_new": 0,
 }
 STEP_LABELS = {
     "clean":         "ลบข้อมูลเดิมก่อน restore",
@@ -30,6 +30,7 @@ STEP_LABELS = {
     "export":        "Export",
     "web_item":      "Web Item (สร้างเว็บสถิติ set → web-item/index.html)",
     "link_devid":    "Link Dev-ID (ผูก devid + สุ่ม email/pass → .txt)",
+    "login_new":     "Login-New (login จาก .txt -email/pass → login-success)",
 }
 # เปิด find/find_treasure → ปิด step พวกนี้อัตโนมัติ (ต้องรันเดี่ยวๆ) — box เปิดพร้อมได้
 FIND_STEPS = ("find", "find_treasure")
