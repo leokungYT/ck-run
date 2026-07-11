@@ -36,6 +36,8 @@ except Exception:
 import re
 import glob
 import json
+import random
+import string
 import time
 import shutil
 import signal
@@ -63,7 +65,8 @@ LOGIN_CONFIG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "co
 
 DEFAULTS = {
     "steps": {"clean": 1, "restore": 1, "event": 1, "find": 0, "find_treasure": 0, "box": 1,
-              "check_ruby": 0, "maxgacha": 1, "maxpet": 1, "export": 1, "web_item": 1, "web_view": 1},
+              "check_ruby": 0, "maxgacha": 1, "maxpet": 1, "export": 1, "web_item": 1, "web_view": 1,
+              "link_devid": 0},
     "event_rounds": C.EVENT_LOOP_ROUNDS,
     "config_name": C.CUSTOM_CONFIG_NAME,
     "input_dir": "input-id",
@@ -85,6 +88,8 @@ DEFAULTS = {
     "extra_sombut": "",       # ชื่อ output บังคับของ find-treasure (ควรเป็น name ใน config-treasure.json)
     "web_view_id_found": 1,   # 1 = ดึงข้อมูลจาก id-found มาโชว์ใน web_view/web_item
     "web_view_backup_id": 1,  # 1 = ดึงข้อมูลจาก backup-id มาโชว์ใน web_view/web_item
+    "devid_dir": "link-devid",          # link-devid: โฟลเดอร์เก็บไฟล์ .txt (email/password)
+    "devid_email_prefix": "nuuboyshop", # link-devid: ขึ้นต้น email ก่อนสุ่ม 5 ตัว → nuuboyshopXXXXX@gmail.com
 }
 _last_config_mtime = 0
 LOGIN = dict(DEFAULTS)
@@ -125,7 +130,8 @@ def load_login_config(force=False):
                       "found_dir", "not_found_dir", "failed_dir", "claim_dir", "start_wait", "shard_size",
                       "log_dir", "log_console",
                       "extra_check_pet", "extra_pet", "extra_check_sombut", "extra_sombut",
-                      "web_view_id_found", "web_view_backup_id"):
+                      "web_view_id_found", "web_view_backup_id",
+                      "devid_dir", "devid_email_prefix"):
                 if k in loaded:
                     cfg[k] = loaded[k]
                 elif k.replace("_", "-") in loaded:
@@ -155,6 +161,8 @@ def load_login_config(force=False):
     cfg["config_name"] = str(cfg["config_name"]).strip() or C.CUSTOM_CONFIG_NAME
     cfg["web_view_id_found"] = 1 if cfg.get("web_view_id_found", 1) else 0
     cfg["web_view_backup_id"] = 1 if cfg.get("web_view_backup_id", 1) else 0
+    cfg["devid_dir"] = str(cfg.get("devid_dir", "link-devid")).strip() or "link-devid"
+    cfg["devid_email_prefix"] = str(cfg.get("devid_email_prefix", "nuuboyshop")).strip() or "nuuboyshop"
     LOGIN = cfg
 
     # push ค่าเข้า config เพื่อให้ engine เดิม (run_event_loops) ใช้ทันที
@@ -448,7 +456,9 @@ EVENT_NAMES = ("event-back.bmp", "git-item.bmp", "fix-daliy.png", "ok-gifitem.bm
 EVENT_CHECKPOINT = "check-pointevent.bmp"   # รูป checkpoint ก่อนเข้าหน้า event
 EVENT_CHECKPOINT_FIX = "fixcheck-pointevent.bmp" # รูป checkpoint event รุ่นสำรอง/แก้ไข
 EVENT_CHECKPOINT_TIMEOUT = 30               # รอ checkpoint กี่วิ (ไม่เจอ → เริ่ม event เลย)
-EVENT_STOP_IMG = "stopeventloop.png"        # เจอรูปนี้ → break EVENT LOOP ทันที (ไม่ต้องครบรอบ)
+EVENT_CHECKPOINT_SETTLE = 8                 # หลังเจอ check-pointevent → delay กี่วิ ให้จอลื่น/นิ่งก่อนทำงาน
+EVENT_STOP_IMG = "stopeventloop.png"        # เจอรูปนี้ 'ค้างครบ EVENT_STOP_HOLD วิ' → break EVENT LOOP (ไม่ต้องครบรอบ)
+EVENT_STOP_HOLD = 5                         # stopeventloop ต้องค้างต่อเนื่องกี่วิ ถึงจะยอมหยุด (กันเจอแวบเดียวแล้วหยุดผิด)
 
 # ── login checkpoint: หลัง start เกม → "กด play8 ซ้ำๆ" จนเจอ checkpointlogin (เข้า login จริง) ──────
 #  แก้อาการเดิม: พอ play8 หาย (จอเปลี่ยน/animation) แล้วเลิกกด → ค้างรอ checkpointlogin ที่ไม่มาสักที
@@ -533,7 +543,8 @@ def wait_event_checkpoint(device):
         if M.ImgSearchADB(img, M.img_path(LOGIN_FAILED_IMG)):
             raise LoginFailed()
         if M.ImgSearchADB(img, path) or M.ImgSearchADB(img, path_fix):
-            M.log(serial, "เจอ checkpoint event", Fore.GREEN)
+            M.log(serial, f"เจอ checkpoint event → delay {EVENT_CHECKPOINT_SETTLE}s ให้จอลื่นก่อนทำงาน", Fore.GREEN)
+            time.sleep(EVENT_CHECKPOINT_SETTLE)
             return True
         time.sleep(0.3)
 
@@ -582,18 +593,182 @@ def wait_login_checkpoint(device):
         time.sleep(0.25)
 
 
+def _stopeventloop_held(device, stop_path, hold=EVENT_STOP_HOLD):
+    """เช็คว่า stopeventloop 'ค้างต่อเนื่อง' ครบ hold วิ ค่อยคืน True
+    (ไม่เจอ → คืน False ทันที | เจอแล้วหายกลางทาง → คืน False = ไม่ใช่ค้างจริง)"""
+    if not M.ImgSearchADB(M.fast_screencap(device), stop_path):
+        return False
+    start = time.time()
+    while time.time() - start < hold:
+        if not M.bot_running:
+            return False
+        if not M.ImgSearchADB(M.fast_screencap(device), stop_path):
+            return False   # หายระหว่างนับ → เจอแวบเดียว ไม่นับว่าค้าง
+        time.sleep(0.3)
+    return True
+
+
 def run_event_loops(device):
     serial = device.serial
     stop_path = M.img_path(EVENT_STOP_IMG)
     for rnd in range(1, C.EVENT_LOOP_ROUNDS + 1):
         _raise_if_login_failed(device)   # เจอ login-failed ระหว่าง event → ยกเลิกบัญชี
-        # เจอ stopeventloop → break ออกเลย ไม่ต้องทำครบรอบ
-        if M.ImgSearchADB(M.fast_screencap(device), stop_path):
-            M.log(serial, f"เจอ {EVENT_STOP_IMG} → หยุด EVENT LOOP (รอบ {rnd}/{C.EVENT_LOOP_ROUNDS})", Fore.YELLOW)
+        # เจอ stopeventloop 'ค้างครบ EVENT_STOP_HOLD วิ' → break (กันเจอแวบเดียวตอน checkpoint แล้วหยุดผิด)
+        if _stopeventloop_held(device, stop_path):
+            M.log(serial, f"เจอ {EVENT_STOP_IMG} ค้างครบ {EVENT_STOP_HOLD}s → หยุด EVENT LOOP (รอบ {rnd}/{C.EVENT_LOOP_ROUNDS})", Fore.YELLOW)
             break
         M.log(serial, f"=== EVENT LOOP รอบ {rnd}/{C.EVENT_LOOP_ROUNDS} ===", Fore.GREEN)
         for name in EVENT_NAMES:
             M.handle_repeating(device, name, appear_timeout=EVENT_APPEAR_TIMEOUT)
+
+
+# ═══════════════════════════════════════════════════════════════════════
+#  STEP: link-devid — ผูก dev id + สุ่ม email/password (เปิดด้วย steps.link-devid = 1)
+#  ทำงาน "หลัง event loop เสร็จ" แล้วจบบัญชีเลย (ข้าม box/find/maxgacha/maxpet/export):
+#    dev1 → dev2 → dev3 → dev4 → รอ checkpointdev1 → swipe (472,349)→(507,259)
+#    → dev5 → dev6 → กรอก email = <member_id>@gmail.com (ดึงจาก Cocos2dxPrefsFile.xml) → dev7
+#    → password1 (สุ่ม pw 10 หลัก มีเลขผสม) → password2 (กรอก pw เดิมซ้ำ)
+#    → dev8 → dev9 → dev10
+#    → เขียนไฟล์ <ชื่อเดิม>.txt รูปแบบ -<email>/<password> ลงโฟลเดอร์ devid_dir → clear app
+#  ⚠️ ต้องมีรูปใน img/devid/: dev1-11 checkpointdev1 password1 password2 (.bmp)
+# ═══════════════════════════════════════════════════════════════════════
+DEVID_DIR = "img/devid"
+DEVID_CHECKPOINT = "checkpointdev1.bmp"     # รูป checkpoint ระหว่างขั้นตอน (แค่ detect ไม่กด)
+DEVID_CHECKPOINT_TIMEOUT = 30               # รอ checkpointdev1 โผล่กี่วิ (ไม่เจอ → swipe/ไปต่อ best-effort)
+DEVID_SWIPE = (472, 349, 507, 259)          # swipe (x1,y1)→(x2,y2) หลังเจอ checkpointdev1
+DEVID_SWIPE_MS = 300                        # เวลาลาก swipe (มิลลิวินาที)
+DEVID_CHECKPOINT_SETTLE = 8                 # หลังเจอ checkpointdev1 → delay กี่วิ ให้จอนิ่งก่อน swipe
+DEVID_STEP_DELAY = 0.6                      # หน่วงหลังกดปุ่ม dev แต่ละอัน
+
+
+def _rand_email():
+    """สุ่ม email: <prefix> + 5 ตัว (a-z0-9 ไม่ซ้ำกันใน 5 ตัว = โอกาสซ้ำน้อยสุด) + @gmail.com"""
+    prefix = str(LOGIN.get("devid_email_prefix", "nuuboyshop")).strip() or "nuuboyshop"
+    tail = "".join(random.sample(string.ascii_lowercase + string.digits, 5))
+    return f"{prefix}{tail}@gmail.com"
+
+
+def _rand_password(length=10):
+    """สุ่ม password ยาว length ตัว บังคับมีทั้งตัวเลขและตัวอักษร
+    ใช้เฉพาะ a-zA-Z0-9 (ไม่มีอักขระพิเศษ) → ปลอดภัยกับ adb `input text`"""
+    pool = string.ascii_letters + string.digits
+    while True:
+        pw = "".join(random.choice(pool) for _ in range(length))
+        if any(c.isdigit() for c in pw) and any(c.isalpha() for c in pw):
+            return pw
+
+
+def _devid_member_id(zpath, base):
+    """ดึง member_id สำหรับ email: จาก Cocos2dxPrefsFile.xml ใน zip ก่อน (key member_id)
+    → ไม่ได้ค่อย fallback ดึง [ID] จากชื่อไฟล์ (เช่น Trader+[CSZPF9098] → CSZPF9098)"""
+    # 1) แตก Cocos2dxPrefsFile.xml จาก zip แล้วดึง member_id (ตาม C.MEMBER_ID_FILE / MEMBER_ID_KEY)
+    try:
+        with zipfile.ZipFile(zpath) as zf:
+            if C.MEMBER_ID_FILE in zf.namelist():
+                tmp = tempfile.mkdtemp(prefix="ckmid_")
+                try:
+                    zf.extract(C.MEMBER_ID_FILE, tmp)
+                    mid = M.extract_member_id(os.path.join(tmp, C.MEMBER_ID_FILE))
+                    if mid:
+                        return mid
+                finally:
+                    shutil.rmtree(tmp, ignore_errors=True)
+    except Exception:
+        pass
+    # 2) fallback: [ID] ในชื่อไฟล์ (member id มีตัวอักษรนำหน้าเสมอ)
+    m = re.search(r"\[([A-Za-z][A-Za-z0-9]*)\]", base)
+    return m.group(1) if m else None
+
+
+def _devid_wait_img(device, name, timeout):
+    """รอรูป name (ในโฟลเดอร์ devid) โผล่ — แค่ detect ไม่กด. คืน True ถ้าเจอ / False ถ้า timeout/ถูกหยุด"""
+    path = M.img_path(name, DEVID_DIR)
+    start = time.time()
+    while time.time() - start < timeout:
+        if not M.bot_running:
+            return False
+        if M.ImgSearchADB(M.fast_screencap(device), path):
+            return True
+        time.sleep(0.3)
+    return False
+
+
+def _write_devid_txt(base, email, password):
+    """เขียนไฟล์ <base>.txt (ชื่อเดิมที่ส่งเข้ามา) เก็บ credential รูปแบบบรรทัดเดียว: -<email>/<password>
+    เช่น -CSZPF9098@gmail.com/Ab3xK9mP2q. กันชื่อชนด้วย _2, _3, ..."""
+    out_dir = str(LOGIN.get("devid_dir", "link-devid")).strip() or "link-devid"
+    os.makedirs(out_dir, exist_ok=True)
+    path = os.path.join(out_dir, f"{base}.txt")
+    i = 2
+    while os.path.exists(path):
+        path = os.path.join(out_dir, f"{base}_{i}.txt")
+        i += 1
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(f"-{email}/{password}\n")
+    return path
+
+
+def run_link_devid(device, base, zpath):
+    """ผูก dev id: email = <member_id>@gmail.com (ดึงจาก Cocos2dxPrefsFile.xml) + สุ่ม password 10 หลัก
+    → เขียนไฟล์ .txt รูปแบบ -email/password. คืน (email, password) ถ้าทำครบ | None ถ้าถูกหยุด"""
+    serial = device.serial
+    M.log(serial, "=== LINK-DEVID ===", Fore.GREEN)
+
+    # dev1 → dev4
+    for i in range(1, 5):
+        if not M.bot_running:
+            return None
+        M.wait_and_click(device, f"dev{i}.bmp", folder=DEVID_DIR, required=False, post_delay=DEVID_STEP_DELAY)
+
+    # รอ checkpointdev1 โผล่ (แค่ detect) → delay ให้จอนิ่ง → swipe ตำแหน่งที่กำหนด
+    if _devid_wait_img(device, DEVID_CHECKPOINT, DEVID_CHECKPOINT_TIMEOUT):
+        M.log(serial, f"เจอ {DEVID_CHECKPOINT} → delay {DEVID_CHECKPOINT_SETTLE}s แล้วค่อย swipe", Fore.GREEN)
+        time.sleep(DEVID_CHECKPOINT_SETTLE)
+    else:
+        M.log(serial, f"⚠️ ไม่เจอ {DEVID_CHECKPOINT} ใน {DEVID_CHECKPOINT_TIMEOUT}s → swipe แล้วไปต่อ (best-effort)", Fore.YELLOW)
+    if not M.bot_running:
+        return None
+    x1, y1, x2, y2 = DEVID_SWIPE
+    M.log(serial, f"swipe ({x1},{y1})→({x2},{y2})", Fore.CYAN)
+    device.shell(f"input swipe {x1} {y1} {x2} {y2} {DEVID_SWIPE_MS}")
+    time.sleep(DEVID_STEP_DELAY)
+
+    # dev5 → dev6
+    M.wait_and_click(device, "dev5.bmp", folder=DEVID_DIR, required=False, post_delay=DEVID_STEP_DELAY)
+    M.wait_and_click(device, "dev6.bmp", folder=DEVID_DIR, required=False, post_delay=DEVID_STEP_DELAY)
+
+    # หลัง dev6 → email = <member_id>@gmail.com (ดึงจาก Cocos2dxPrefsFile.xml) แล้วกรอก → dev7
+    member_id = _devid_member_id(zpath, base)
+    if member_id:
+        email = f"{member_id}@gmail.com"
+        M.log(serial, f"member_id = {member_id} → email = {email}", Fore.GREEN)
+    else:
+        email = _rand_email()   # fallback: ดึง member_id ไม่ได้ → ใช้ email สุ่มแบบเดิม
+        M.log(serial, f"⚠️ ดึง member_id ไม่ได้ → ใช้ email สุ่มแทน: {email}", Fore.YELLOW)
+    device.shell(f"input text '{email}'")
+    time.sleep(DEVID_STEP_DELAY)
+    M.wait_and_click(device, "dev7.bmp", folder=DEVID_DIR, required=False, post_delay=DEVID_STEP_DELAY)
+
+    # password1 → สุ่ม pw 10 หลัก แล้วกรอก | password2 → กรอก pw เดิมซ้ำ (จำค่าจาก password1)
+    password = _rand_password(10)
+    M.wait_and_click(device, "password1.bmp", folder=DEVID_DIR, required=False, post_delay=0.5)
+    M.log(serial, f"สุ่ม password = {password}", Fore.GREEN)
+    device.shell(f"input text '{password}'")
+    time.sleep(DEVID_STEP_DELAY)
+    M.wait_and_click(device, "password2.bmp", folder=DEVID_DIR, required=False, post_delay=0.5)
+    device.shell(f"input text '{password}'")
+    time.sleep(DEVID_STEP_DELAY)
+
+    # dev8 → dev10 (จบที่ dev10 — ไม่กด dev11)
+    for i in range(8, 11):
+        if not M.bot_running:
+            return None
+        M.wait_and_click(device, f"dev{i}.bmp", folder=DEVID_DIR, required=False, post_delay=DEVID_STEP_DELAY)
+
+    # เขียนไฟล์ <ชื่อเดิม>.txt เก็บ email/password
+    txt = _write_devid_txt(base, email, password)
+    M.log(serial, f"✅ link-devid เสร็จ → {txt}", Fore.GREEN)
+    return email, password
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -1725,6 +1900,15 @@ def process_account(device, serial, zpath):
         # 3) event loops
         if step_on("event"):
             run_event_loops(device)
+
+        # 3.1) link-devid — ทำ "หลัง event loop เสร็จ" → ผูก dev id + สุ่ม email/pw → เขียน .txt → clear app
+        #       แล้วจบบัญชีเลย (ข้าม box/find/maxgacha/maxpet/export)
+        if step_on("link_devid"):
+            run_link_devid(device, os.path.splitext(name)[0], zpath)
+            M.close_app(device)          # clear app หลังเขียน .txt เสร็จ
+            M.log(serial, f"└─ เสร็จบัญชี (link-devid): {name}", Fore.GREEN)
+            return True
+
         M.log(serial, "login เสร็จ → ทำ config เพิ่ม (box / maxgacha)", Fore.CYAN)
 
         # 3.5) box — box1 → box2 → box3 (ไม่เจอ 15 วิ → กด box5 แล้วจบ) → box4-5 (ถ้า box=1)
