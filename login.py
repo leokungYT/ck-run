@@ -450,6 +450,14 @@ EVENT_CHECKPOINT_FIX = "fixcheck-pointevent.bmp" # รูป checkpoint event �
 EVENT_CHECKPOINT_TIMEOUT = 30               # รอ checkpoint กี่วิ (ไม่เจอ → เริ่ม event เลย)
 EVENT_STOP_IMG = "stopeventloop.png"        # เจอรูปนี้ → break EVENT LOOP ทันที (ไม่ต้องครบรอบ)
 
+# ── login checkpoint: หลัง start เกม → "กด play8 ซ้ำๆ" จนเจอ checkpointlogin (เข้า login จริง) ──────
+#  แก้อาการเดิม: พอ play8 หาย (จอเปลี่ยน/animation) แล้วเลิกกด → ค้างรอ checkpointlogin ที่ไม่มาสักที
+LOGIN_CHECKPOINT = "check-pointlogin.bmp"        # เจอ = เข้า login แล้ว → หยุดกด play8
+LOGIN_CHECKPOINT_FIX = "fixcheck-pointlogin.bmp" # รุ่นสำรอง/แก้ไข (ไม่มีไฟล์ก็ข้าม)
+LOGIN_PLAY_IMG = "play8.bmp"                      # ปุ่ม play หน้า login (กดซ้ำจนเจอ checkpoint)
+LOGIN_PLAY_IMG_FIX = "fixplay8.bmp"              # ปุ่ม play หน้า login (สำรอง)
+LOGIN_PLAY_INTERVAL = 0.6                         # กด play8 ถี่สุดทุกกี่วิ (กันกดรัวจนพลาด checkpoint)
+
 
 # ── เช็คว่าเกม "เข้าจริง" ไหม (กันเกมเด้ง/ปิดตอน start) ────────────────────
 GAME_ENTER_RETRY = 3       # ถ้าเกมเด้ง/ไม่เข้า → start ใหม่สูงสุดกี่ครั้ง
@@ -528,6 +536,50 @@ def wait_event_checkpoint(device):
             M.log(serial, "เจอ checkpoint event", Fore.GREEN)
             return True
         time.sleep(0.3)
+
+
+def wait_login_checkpoint(device):
+    """รอ checkpointlogin — "กด play8/fixplay8 ซ้ำๆ ไปเรื่อยๆ" จนกว่าจะเจอ checkpointlogin ค่อยหยุด
+    ต่างจากเดิมที่กด play8 ทีเดียวแล้วพอ play8 หายก็เลิกกด → ค้างรอ checkpointlogin ที่ไม่มาสักที
+    ตอนนี้ตราบใดที่ยังไม่เจอ checkpointlogin จะกด play8 ทุกครั้งที่เห็น จนกว่าจะเข้า login จริง"""
+    serial = device.serial
+    cp = M.img_path(LOGIN_CHECKPOINT)
+    cp_fix = M.img_path(LOGIN_CHECKPOINT_FIX)
+    play = M.img_path(LOGIN_PLAY_IMG)
+    play_fix = M.img_path(LOGIN_PLAY_IMG_FIX)
+
+    # ไม่มีไฟล์รูป checkpointlogin เลย → ข้าม (กันวนกด play8 ไม่จบเพราะไม่มีอะไรให้เจอ)
+    if not (os.path.exists(cp) or os.path.exists(cp_fix)):
+        M.log(serial, f"[Checkpoint] ⚠️ ไม่เจอไฟล์รูป {LOGIN_CHECKPOINT} → ข้าม login-checkpoint", Fore.YELLOW)
+        return True
+
+    M.log(serial, "[Checkpoint] รอ checkpointlogin — กด play8 ซ้ำๆ จนกว่าจะเข้า login...", Fore.CYAN)
+    last_tap = 0.0
+    while True:
+        if not M.bot_running:
+            return False
+        img = M.fast_screencap(device)
+        if img is None:
+            time.sleep(0.2)
+            continue
+        # login-failed ระหว่างรอ → ยกเลิกบัญชี (เก็บเข้า login-failed/)
+        if M.ImgSearchADB(img, M.img_path(LOGIN_FAILED_IMG)):
+            raise LoginFailed()
+        # เจอ checkpointlogin → เข้า login แล้ว หยุดกด play8
+        if M.ImgSearchADB(img, cp) or M.ImgSearchADB(img, cp_fix):
+            M.log(serial, "[Checkpoint] เจอ checkpointlogin → เข้า login แล้ว", Fore.GREEN)
+            return True
+        # ยังไม่เจอ checkpoint → เห็น play8 (หรือ fixplay8) เมื่อไหร่ กดเลย
+        # เว้นจังหวะ LOGIN_PLAY_INTERVAL กันกดรัวจนจอไม่ทันเปลี่ยน/พลาด checkpoint
+        now = time.time()
+        if now - last_tap >= LOGIN_PLAY_INTERVAL:
+            pts = M.ImgSearchADB(img, play) or M.ImgSearchADB(img, play_fix)
+            if pts:
+                x, y = pts[0]
+                M.tap(device, x, y)
+                M.log(serial, f"[play8] กด play8 ({x},{y}) → รอ checkpointlogin", Fore.MAGENTA)
+                last_tap = now
+        time.sleep(0.25)
 
 
 def run_event_loops(device):
@@ -1656,6 +1708,13 @@ def process_account(device, serial, zpath):
 
         # 2.5) เช็คว่าเกมเข้าจริงไหม — เด้ง/ปิด/ไม่ขึ้นหน้าจอ → start ใหม่ (แทน sleep คงที่เดิม)
         ensure_game_entered(device)
+
+        # 2.6) login checkpoint — กด play8 ซ้ำๆ จนเจอ checkpointlogin (เข้า login จริง)
+        #      กันอาการ play8 หายแล้วเลิกกด → ค้างรอ checkpointlogin ไม่มาสักที
+        if not wait_login_checkpoint(device):
+            if not M.bot_running:
+                return False
+            raise LoginFailed()
 
         # รอ checkpoint event ให้เจอก่อนเริ่มทำงาน (ต้องเจอเสมอห้ามข้ามไปทำงานอื่น)
         if not wait_event_checkpoint(device):
