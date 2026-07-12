@@ -1991,13 +1991,14 @@ def recover_login_failed(device):
     ยกเว้น: ถ้า login-failed2 'ค้างครบ LOGIN_FAILED2_HOLD วิ' → เริ่มกู้ที่ login-failed2 เลย (ข้าม login-failed1)
     คืน True ถ้าเจอ+กู้ | False ถ้าไม่เจอ"""
     serial = device.serial
-    # login-failed2 ค้างครบ 5 วิ → เริ่มที่ login-failed2 (ข้าม login-failed1) — เช็คก่อน (ไม่เจอก็คืนไว ไม่หน่วง)
-    if _img_held(device, "login-failed2.bmp", LOGIN_FAILED2_HOLD):
-        M.log(serial, f"login-failed2 ค้างครบ {LOGIN_FAILED2_HOLD}s → เริ่มกู้ที่ login-failed2 (ข้าม login-failed1)", Fore.YELLOW)
-        seq = LOGIN_FAILED_RECOVER[1:]   # login-failed2 → login-failed3
-    elif login_failed_seen(device):
+    # 1) เจอ login-failed (หน้าหลัก มีปุ่ม Confirm) → ทำก่อน กู้ตั้งแต่ login-failed1 ทันที (ไม่รอ 5 วิ)
+    if login_failed_seen(device):
         M.log(serial, "เจอ login-failed → กด login-failed1/2/3 กู้ แล้วทำงานต่อ (ไม่ส่งไปเก็บ)", Fore.YELLOW)
         seq = LOGIN_FAILED_RECOVER    # login-failed1 → 2 → 3
+    # 2) ไม่งั้น login-failed2 ค้างครบ 5 วิ (หน้าเด้งไปปุ่ม 2 เลย ไม่มี login-failed.bmp) → เริ่มที่ login-failed2
+    elif _img_held(device, "login-failed2.bmp", LOGIN_FAILED2_HOLD):
+        M.log(serial, f"login-failed2 ค้างครบ {LOGIN_FAILED2_HOLD}s → เริ่มกู้ที่ login-failed2 (ข้าม login-failed1)", Fore.YELLOW)
+        seq = LOGIN_FAILED_RECOVER[1:]   # login-failed2 → login-failed3
     else:
         return False
     for n in seq:
