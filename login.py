@@ -1952,6 +1952,8 @@ LOGIN_FAILED_IMG = "login-failed.bmp"
 LOGIN_FAILED_RECOVER = ("login-failed1.bmp", "login-failed2.bmp", "login-failed3.bmp")
 LOGIN_FAILED_RECOVER_TIMEOUT = 8   # รอปุ่มกู้ (login-failed1/2/3) แต่ละอันกี่วิ (ไม่เจอ → ข้าม)
 LOGIN_FAILED2_HOLD = 5             # login-failed2 ค้างต่อเนื่องครบกี่วิ → เริ่มกู้ที่ login-failed2 เลย (ข้าม login-failed1)
+LOGIN_FAILED_MAX_ROUNDS = 3        # เจอ login-failed กี่รอบระหว่าง loop → เลิกกู้ → clear app + ส่งไป login-failed/
+_login_failed_count = {}           # serial → จำนวนรอบที่เจอ login-failed (รีเซ็ตต่อบัญชีใน process_account)
 
 
 class LoginFailed(Exception):
@@ -1987,20 +1989,28 @@ def _img_held(device, name, hold, folder=C.IMG_DIR):
 
 
 def recover_login_failed(device):
-    """เจอ login-failed → กด login-failed1 → 2 → 3 กลับเข้าเกม แล้วทำงานต่อปกติ (ไม่ clear app / ไม่ export)
-    ยกเว้น: ถ้า login-failed2 'ค้างครบ LOGIN_FAILED2_HOLD วิ' → เริ่มกู้ที่ login-failed2 เลย (ข้าม login-failed1)
+    """เจอ login-failed → กด login-failed1 → 2 → 3 กลับเข้าเกม แล้วทำงานต่อ (ไม่ clear app / ไม่ export)
+    ยกเว้น: login-failed2 'ค้างครบ LOGIN_FAILED2_HOLD วิ' → เริ่มกู้ที่ login-failed2 เลย (ข้าม login-failed1)
+    ⚠️ เจอครบ LOGIN_FAILED_MAX_ROUNDS รอบ → เลิกกู้ → raise LoginFailed (clear app + ส่งไป login-failed/)
     คืน True ถ้าเจอ+กู้ | False ถ้าไม่เจอ"""
     serial = device.serial
-    # 1) เจอ login-failed (หน้าหลัก มีปุ่ม Confirm) → ทำก่อน กู้ตั้งแต่ login-failed1 ทันที (ไม่รอ 5 วิ)
+    # 1) เจอ login-failed (หน้าหลัก มีปุ่ม Confirm) → ทำก่อน กู้ตั้งแต่ login-failed1 (ไม่รอ 5 วิ)
     if login_failed_seen(device):
-        M.log(serial, "เจอ login-failed → กด login-failed1/2/3 กู้ แล้วทำงานต่อ (ไม่ส่งไปเก็บ)", Fore.YELLOW)
-        seq = LOGIN_FAILED_RECOVER    # login-failed1 → 2 → 3
+        seq, why = LOGIN_FAILED_RECOVER, "เจอ login-failed → กด login-failed1/2/3"
     # 2) ไม่งั้น login-failed2 ค้างครบ 5 วิ (หน้าเด้งไปปุ่ม 2 เลย ไม่มี login-failed.bmp) → เริ่มที่ login-failed2
     elif _img_held(device, "login-failed2.bmp", LOGIN_FAILED2_HOLD):
-        M.log(serial, f"login-failed2 ค้างครบ {LOGIN_FAILED2_HOLD}s → เริ่มกู้ที่ login-failed2 (ข้าม login-failed1)", Fore.YELLOW)
-        seq = LOGIN_FAILED_RECOVER[1:]   # login-failed2 → login-failed3
+        seq, why = LOGIN_FAILED_RECOVER[1:], f"login-failed2 ค้างครบ {LOGIN_FAILED2_HOLD}s → เริ่มที่ login-failed2"
     else:
         return False
+
+    # นับรอบที่เจอ login-failed — ครบ MAX แล้วยังเจออีก → เลิกกู้ (login พังจริง)
+    _login_failed_count[serial] = _login_failed_count.get(serial, 0) + 1
+    cnt = _login_failed_count[serial]
+    if cnt >= LOGIN_FAILED_MAX_ROUNDS:
+        M.log(serial, f"เจอ login-failed ครบ {cnt}/{LOGIN_FAILED_MAX_ROUNDS} รอบ → เลิกกู้ → clear app + ส่งไป login-failed/", Fore.RED)
+        raise LoginFailed()
+
+    M.log(serial, f"{why} กู้ (รอบ {cnt}/{LOGIN_FAILED_MAX_ROUNDS}) แล้วทำงานต่อ (ไม่ส่งไปเก็บ)", Fore.YELLOW)
     for n in seq:
         M.wait_and_click(device, n, timeout=LOGIN_FAILED_RECOVER_TIMEOUT, required=False, post_delay=0.6)
     return True
@@ -2062,6 +2072,7 @@ def process_account(device, serial, zpath):
     found = set()
     ruby = None
     login_new_creds = None
+    _login_failed_count[serial] = 0   # รีเซ็ตตัวนับ login-failed ต่อบัญชี (กู้ได้สูงสุด MAX รอบ)
     try:
         _check_login_failed(device)   # เจอ login-failed ตั้งแต่หลัง start → กู้แล้วทำต่อ
 
@@ -2131,11 +2142,16 @@ def process_account(device, serial, zpath):
             run_maxpet(device, found)
     except LoginFailed:
         if step_on("login_new"):
-            # login-new: login พัง → clear app แล้วให้ worker ย้าย .txt เข้า failed (ไม่ zip)
-            M.log(serial, "⚠️ login-new: login-failed → เก็บ .txt เข้า failed", Fore.RED)
+            # login-new: login พัง → clear app + เขียน .txt (credential เดิม) เข้า login-failed/
             M.close_app(device)
+            email, password = login_new_creds if login_new_creds else _parse_login_new_creds(zpath)
+            if email and password:
+                txt = _export_login_new_txt(os.path.splitext(name)[0], _shard_dir(LOGIN["login_failed_dir"]), email, password)
+                M.log(serial, f"⚠️ login-new: login-failed → clear app + เก็บ {txt}", Fore.RED)
+                return True
+            M.log(serial, "⚠️ login-new: login-failed + อ่าน credential ไม่ได้ → เก็บเข้า failed", Fore.RED)
             return False
-        handle_login_failed(device, serial, base)
+        handle_login_failed(device, serial, base)   # โหมดปกติ: clear app + zip บัญชี → login-failed/
         return True
     finally:
         stop_wd.set()          # จบ game-step แล้ว → หยุด popup watchdog
