@@ -511,7 +511,7 @@ def ensure_game_entered(device):
         while time.time() < deadline:
             if not M.bot_running:
                 return False
-            _raise_if_login_failed(device)      # เจอ login-failed = ยกเลิกบัญชี (โยน exception)
+            _check_login_failed(device)      # เจอ login-failed → กู้ด้วย login-failed1/2/3 ทำต่อ
             if _app_foreground(device):
                 M.log(serial, f"✓ เกมเข้าแล้ว (foreground, ครั้งที่ {attempt})", Fore.GREEN)
                 return True
@@ -541,7 +541,8 @@ def wait_event_checkpoint(device):
             return False
         img = M.fast_screencap(device)
         if M.ImgSearchADB(img, M.img_path(LOGIN_FAILED_IMG)):
-            raise LoginFailed()
+            recover_login_failed(device)   # กู้ด้วย login-failed1/2/3 แล้ววนหา checkpoint ต่อ
+            continue
         if M.ImgSearchADB(img, path) or M.ImgSearchADB(img, path_fix):
             M.log(serial, f"เจอ checkpoint event → delay {EVENT_CHECKPOINT_SETTLE}s ให้จอลื่นก่อนทำงาน", Fore.GREEN)
             time.sleep(EVENT_CHECKPOINT_SETTLE)
@@ -573,9 +574,10 @@ def wait_login_checkpoint(device):
         if img is None:
             time.sleep(0.2)
             continue
-        # login-failed ระหว่างรอ → ยกเลิกบัญชี (เก็บเข้า login-failed/)
+        # login-failed ระหว่างรอ → กู้ด้วย login-failed1/2/3 แล้ววนกด play8 ต่อ (ไม่ยกเลิก)
         if M.ImgSearchADB(img, M.img_path(LOGIN_FAILED_IMG)):
-            raise LoginFailed()
+            recover_login_failed(device)
+            continue
         # เจอ checkpointlogin → เข้า login แล้ว หยุดกด play8
         if M.ImgSearchADB(img, cp) or M.ImgSearchADB(img, cp_fix):
             M.log(serial, "[Checkpoint] เจอ checkpointlogin → เข้า login แล้ว", Fore.GREEN)
@@ -612,7 +614,7 @@ def run_event_loops(device):
     serial = device.serial
     stop_path = M.img_path(EVENT_STOP_IMG)
     for rnd in range(1, C.EVENT_LOOP_ROUNDS + 1):
-        _raise_if_login_failed(device)   # เจอ login-failed ระหว่าง event → ยกเลิกบัญชี
+        _check_login_failed(device)   # เจอ login-failed ระหว่าง event → กู้แล้วทำต่อ
         # เจอ stopeventloop 'ค้างครบ EVENT_STOP_HOLD วิ' → break (กันเจอแวบเดียวตอน checkpoint แล้วหยุดผิด)
         if _stopeventloop_held(device, stop_path):
             M.log(serial, f"เจอ {EVENT_STOP_IMG} ค้างครบ {EVENT_STOP_HOLD}s → หยุด EVENT LOOP (รอบ {rnd}/{C.EVENT_LOOP_ROUNDS})", Fore.YELLOW)
@@ -996,7 +998,7 @@ def run_find(device, found):
     for i, name in enumerate(names, 1):
         if not M.bot_running:
             break
-        _raise_if_login_failed(device)
+        _check_login_failed(device)
         M.log(serial, f"--- find {i}/{len(names)}: {name} ---", Fore.CYAN)
         M.wait_and_click(device, "fin2.png", folder=FIN_DIR, required=False, post_delay=0.35)
         M.wait_and_click(device, "fin3.png", folder=FIN_DIR, required=False, post_delay=0.35)
@@ -1171,7 +1173,7 @@ def run_treasure(device, found):
     for i, e in enumerate(entries, 1):
         if not M.bot_running:
             break
-        _raise_if_login_failed(device)
+        _check_login_failed(device)
         M.log(serial, f"--- treasure {i}/{len(entries)}: ค้นหา '{e['search']}' (รูป {e['img']}) ---", Fore.CYAN)
         # แต่ละรอบเริ่มที่ fin3
         M.wait_and_click(device, "fin3.png", folder=TREASURE_DIR, required=False, post_delay=0.35)
@@ -1943,23 +1945,37 @@ def _shard_dir(base_dir):
 
 
 # ═══════════════════════════════════════════════════════════════════════
-#  login-failed watchdog — เจอหน้า login-failed เมื่อไหร่ → ยกเลิกบัญชีนี้
-#  clear app → export บัญชี (ชื่อเดิม) เข้า login-failed/ แล้วไป id ถัดไป
+#  login-failed — เจอหน้า login-failed → "กู้" ด้วย login-failed1 → 2 → 3
+#  แล้วทำงานต่อปกติ (ไม่ clear app / ไม่ export ไป login-failed/ อีกแล้ว)
 # ═══════════════════════════════════════════════════════════════════════
 LOGIN_FAILED_IMG = "login-failed.bmp"
+LOGIN_FAILED_RECOVER = ("login-failed1.bmp", "login-failed2.bmp", "login-failed3.bmp")
+LOGIN_FAILED_RECOVER_TIMEOUT = 8   # รอปุ่มกู้ (login-failed1/2/3) แต่ละอันกี่วิ (ไม่เจอ → ข้าม)
 
 
 class LoginFailed(Exception):
-    """โยนเมื่อเจอหน้า login-failed → process_account จับแล้วจัดการ"""
+    """โยนเมื่อ login พังจริง (เช่น login_new อ่าน credential ไม่ได้) → process_account จับ
+    หมายเหตุ: การเจอ 'login-failed.bmp' ไม่ raise แล้ว → กู้ด้วย recover_login_failed ทำงานต่อ"""
 
 
 def login_failed_seen(device):
     return bool(M.ImgSearchADB(M.fast_screencap(device), M.img_path(LOGIN_FAILED_IMG)))
 
 
-def _raise_if_login_failed(device):
-    if login_failed_seen(device):
-        raise LoginFailed()
+def recover_login_failed(device):
+    """เจอ login-failed.bmp → กด login-failed1 → 2 → 3 กลับเข้าเกม แล้วทำงานต่อปกติ
+    (ไม่ clear app / ไม่ export). คืน True ถ้าเจอ+กู้ | False ถ้าไม่เจอ"""
+    if not login_failed_seen(device):
+        return False
+    M.log(device.serial, "เจอ login-failed → กด login-failed1/2/3 กู้ แล้วทำงานต่อ (ไม่ส่งไปเก็บ)", Fore.YELLOW)
+    for n in LOGIN_FAILED_RECOVER:
+        M.wait_and_click(device, n, timeout=LOGIN_FAILED_RECOVER_TIMEOUT, required=False, post_delay=0.6)
+    return True
+
+
+def _check_login_failed(device):
+    """เจอ login-failed → กู้ด้วย login-failed1/2/3 แล้วทำงานต่อ (ไม่ raise/ไม่ export แล้ว)"""
+    recover_login_failed(device)
 
 
 def handle_login_failed(device, serial, base):
@@ -2014,7 +2030,7 @@ def process_account(device, serial, zpath):
     ruby = None
     login_new_creds = None
     try:
-        _raise_if_login_failed(device)   # เจอ login-failed ตั้งแต่หลัง start → ยกเลิก
+        _check_login_failed(device)   # เจอ login-failed ตั้งแต่หลัง start → กู้แล้วทำต่อ
 
         # 2.5) เช็คว่าเกมเข้าจริงไหม — เด้ง/ปิด/ไม่ขึ้นหน้าจอ → start ใหม่ (แทน sleep คงที่เดิม)
         ensure_game_entered(device)
