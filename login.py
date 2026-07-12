@@ -1951,6 +1951,7 @@ def _shard_dir(base_dir):
 LOGIN_FAILED_IMG = "login-failed.bmp"
 LOGIN_FAILED_RECOVER = ("login-failed1.bmp", "login-failed2.bmp", "login-failed3.bmp")
 LOGIN_FAILED_RECOVER_TIMEOUT = 8   # รอปุ่มกู้ (login-failed1/2/3) แต่ละอันกี่วิ (ไม่เจอ → ข้าม)
+LOGIN_FAILED2_HOLD = 5             # login-failed2 ค้างต่อเนื่องครบกี่วิ → เริ่มกู้ที่ login-failed2 เลย (ข้าม login-failed1)
 
 
 class LoginFailed(Exception):
@@ -1962,13 +1963,37 @@ def login_failed_seen(device):
     return bool(M.ImgSearchADB(M.fast_screencap(device), M.img_path(LOGIN_FAILED_IMG)))
 
 
-def recover_login_failed(device):
-    """เจอ login-failed.bmp → กด login-failed1 → 2 → 3 กลับเข้าเกม แล้วทำงานต่อปกติ
-    (ไม่ clear app / ไม่ export). คืน True ถ้าเจอ+กู้ | False ถ้าไม่เจอ"""
-    if not login_failed_seen(device):
+def _img_held(device, name, hold, folder=C.IMG_DIR):
+    """เช็ค name (โฟลเดอร์ folder) 'ค้างต่อเนื่อง' ครบ hold วิ → True
+    ไม่เจอ → False ทันที | เจอแล้วหายกลางทาง → False (ไม่ใช่ค้างจริง)"""
+    path = M.img_path(name, folder)
+    if not M.ImgSearchADB(M.fast_screencap(device), path):
         return False
-    M.log(device.serial, "เจอ login-failed → กด login-failed1/2/3 กู้ แล้วทำงานต่อ (ไม่ส่งไปเก็บ)", Fore.YELLOW)
-    for n in LOGIN_FAILED_RECOVER:
+    start = time.time()
+    while time.time() - start < hold:
+        if not M.bot_running:
+            return False
+        if not M.ImgSearchADB(M.fast_screencap(device), path):
+            return False
+        time.sleep(0.3)
+    return True
+
+
+def recover_login_failed(device):
+    """เจอ login-failed → กด login-failed1 → 2 → 3 กลับเข้าเกม แล้วทำงานต่อปกติ (ไม่ clear app / ไม่ export)
+    ยกเว้น: ถ้า login-failed2 'ค้างครบ LOGIN_FAILED2_HOLD วิ' → เริ่มกู้ที่ login-failed2 เลย (ข้าม login-failed1)
+    คืน True ถ้าเจอ+กู้ | False ถ้าไม่เจอ"""
+    serial = device.serial
+    # login-failed2 ค้างครบ 5 วิ → เริ่มที่ login-failed2 (ข้าม login-failed1) — เช็คก่อน (ไม่เจอก็คืนไว ไม่หน่วง)
+    if _img_held(device, "login-failed2.bmp", LOGIN_FAILED2_HOLD):
+        M.log(serial, f"login-failed2 ค้างครบ {LOGIN_FAILED2_HOLD}s → เริ่มกู้ที่ login-failed2 (ข้าม login-failed1)", Fore.YELLOW)
+        seq = LOGIN_FAILED_RECOVER[1:]   # login-failed2 → login-failed3
+    elif login_failed_seen(device):
+        M.log(serial, "เจอ login-failed → กด login-failed1/2/3 กู้ แล้วทำงานต่อ (ไม่ส่งไปเก็บ)", Fore.YELLOW)
+        seq = LOGIN_FAILED_RECOVER    # login-failed1 → 2 → 3
+    else:
+        return False
+    for n in seq:
         M.wait_and_click(device, n, timeout=LOGIN_FAILED_RECOVER_TIMEOUT, required=False, post_delay=0.6)
     return True
 
