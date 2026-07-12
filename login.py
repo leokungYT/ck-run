@@ -540,8 +540,8 @@ def wait_event_checkpoint(device):
         if not M.bot_running:
             return False
         img = M.fast_screencap(device)
-        if M.ImgSearchADB(img, M.img_path(LOGIN_FAILED_IMG)):
-            recover_login_failed(device)   # กู้ด้วย login-failed1/2/3 แล้ววนหา checkpoint ต่อ
+        if _login_failed_visible(img):   # เจอ login-failed / login-failed2 → กู้ (login-failed2 ค้าง5วิ = เริ่มที่ 2)
+            recover_login_failed(device)
             continue
         if M.ImgSearchADB(img, path) or M.ImgSearchADB(img, path_fix):
             M.log(serial, f"เจอ checkpoint event → delay {EVENT_CHECKPOINT_SETTLE}s ให้จอลื่นก่อนทำงาน", Fore.GREEN)
@@ -574,8 +574,8 @@ def wait_login_checkpoint(device):
         if img is None:
             time.sleep(0.2)
             continue
-        # login-failed ระหว่างรอ → กู้ด้วย login-failed1/2/3 แล้ววนกด play8 ต่อ (ไม่ยกเลิก)
-        if M.ImgSearchADB(img, M.img_path(LOGIN_FAILED_IMG)):
+        # login-failed / login-failed2 ระหว่างรอ → กู้ แล้ววนกด play8 ต่อ (ไม่ยกเลิก)
+        if _login_failed_visible(img):
             recover_login_failed(device)
             continue
         # เจอ checkpointlogin → เข้า login แล้ว หยุดกด play8
@@ -1961,6 +1961,13 @@ class LoginFailed(Exception):
 
 def login_failed_seen(device):
     return bool(M.ImgSearchADB(M.fast_screencap(device), M.img_path(LOGIN_FAILED_IMG)))
+
+
+def _login_failed_visible(img):
+    """เจอ login-failed หรือ login-failed2 บนเฟรม img ไหม — ใช้เป็น trigger เรียก recover
+    (login-failed2 เผื่อเคสหน้าเด้งไปที่ปุ่มที่ 2 เลย โดยไม่มี login-failed.bmp)"""
+    return bool(M.ImgSearchADB(img, M.img_path(LOGIN_FAILED_IMG))
+                or M.ImgSearchADB(img, M.img_path("login-failed2.bmp")))
 
 
 def _img_held(device, name, hold, folder=C.IMG_DIR):
