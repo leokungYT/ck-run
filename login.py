@@ -1952,7 +1952,7 @@ LOGIN_FAILED_IMG = "login-failed.bmp"
 LOGIN_FAILED_RECOVER = ("login-failed1.bmp", "login-failed2.bmp", "login-failed3.bmp")
 LOGIN_FAILED_RECOVER_TIMEOUT = 8   # รอปุ่มกู้ (login-failed1/2/3) แต่ละอันกี่วิ (ไม่เจอ → ข้าม)
 LOGIN_FAILED2_HOLD = 5             # login-failed2 ค้างต่อเนื่องครบกี่วิ → เริ่มกู้ที่ login-failed2 เลย (ข้าม login-failed1)
-LOGIN_FAILED_MAX_ROUNDS = 3        # เจอ login-failed กี่รอบระหว่าง loop → เลิกกู้ → clear app + ส่งไป login-failed/
+LOGIN_FAILED_MAX_ROUNDS = 3        # กู้ (กด 1/2/3) ได้สูงสุดกี่รอบ — กู้ครบแล้วยังเจอ login-failed อีก → clear app + ส่งไป login-failed/
 _login_failed_count = {}           # serial → จำนวนรอบที่เจอ login-failed (รีเซ็ตต่อบัญชีใน process_account)
 
 
@@ -1991,8 +1991,8 @@ def _img_held(device, name, hold, folder=C.IMG_DIR):
 def recover_login_failed(device):
     """เจอ login-failed → กด login-failed1 → 2 → 3 กลับเข้าเกม แล้วทำงานต่อ (ไม่ clear app / ไม่ export)
     ยกเว้น: login-failed2 'ค้างครบ LOGIN_FAILED2_HOLD วิ' → เริ่มกู้ที่ login-failed2 เลย (ข้าม login-failed1)
-    ⚠️ เจอครบ LOGIN_FAILED_MAX_ROUNDS รอบ → เลิกกู้ → raise LoginFailed (clear app + ส่งไป login-failed/)
-    คืน True ถ้าเจอ+กู้ | False ถ้าไม่เจอ"""
+    ⚠️ กู้ครบ LOGIN_FAILED_MAX_ROUNDS รอบ (กด 1/2/3 ทุกรอบ) แล้วยังเจอ login-failed อีก
+       → raise LoginFailed (clear app + ส่งไป login-failed/). คืน True ถ้าเจอ+กู้ | False ถ้าไม่เจอ"""
     serial = device.serial
     # 1) เจอ login-failed (หน้าหลัก มีปุ่ม Confirm) → ทำก่อน กู้ตั้งแต่ login-failed1 (ไม่รอ 5 วิ)
     if login_failed_seen(device):
@@ -2003,14 +2003,15 @@ def recover_login_failed(device):
     else:
         return False
 
-    # นับรอบที่เจอ login-failed — ครบ MAX แล้วยังเจออีก → เลิกกู้ (login พังจริง)
-    _login_failed_count[serial] = _login_failed_count.get(serial, 0) + 1
-    cnt = _login_failed_count[serial]
-    if cnt >= LOGIN_FAILED_MAX_ROUNDS:
-        M.log(serial, f"เจอ login-failed ครบ {cnt}/{LOGIN_FAILED_MAX_ROUNDS} รอบ → เลิกกู้ → clear app + ส่งไป login-failed/", Fore.RED)
+    # กู้มาแล้วครบ MAX รอบ (กด 1/2/3 ครบทุกรอบ) แต่ยังเจอ login-failed อีก → login พังจริง → ยอมแพ้
+    if _login_failed_count.get(serial, 0) >= LOGIN_FAILED_MAX_ROUNDS:
+        M.log(serial, f"กู้ครบ {LOGIN_FAILED_MAX_ROUNDS} รอบแล้วยังเจอ login-failed → เลิกกู้ → clear app + ส่งไป login-failed/", Fore.RED)
         raise LoginFailed()
 
-    M.log(serial, f"{why} กู้ (รอบ {cnt}/{LOGIN_FAILED_MAX_ROUNDS}) แล้วทำงานต่อ (ไม่ส่งไปเก็บ)", Fore.YELLOW)
+    # นับรอบนี้ แล้วกด login-failed1 → 2 → 3 (หรือ 2 → 3) ให้ครบตามปกติ แล้ววนทำงานต่อ
+    _login_failed_count[serial] = _login_failed_count.get(serial, 0) + 1
+    cnt = _login_failed_count[serial]
+    M.log(serial, f"{why} (รอบ {cnt}/{LOGIN_FAILED_MAX_ROUNDS}) แล้วทำงานต่อ", Fore.YELLOW)
     for n in seq:
         M.wait_and_click(device, n, timeout=LOGIN_FAILED_RECOVER_TIMEOUT, required=False, post_delay=0.6)
     return True
