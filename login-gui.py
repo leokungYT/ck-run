@@ -313,10 +313,14 @@ class App(ctk.CTk):
                 input_dir = LG.LOGIN["input_dir"]
                 os.makedirs(input_dir, exist_ok=True)
                 os.makedirs(LG.LOGIN["claim_dir"], exist_ok=True)
-                pending = (glob.glob(os.path.join(input_dir, "*.zip"))
-                           + glob.glob(os.path.join(LG.LOGIN["claim_dir"], "*", "*.zip")))
+                # นามสกุล input ตาม step: login-new = .txt + .zip | โหมดอื่น = .zip (ใช้ตัวเดียวกับ login.py)
+                exts = LG._input_exts()
+                pending = LG._glob_inputs(input_dir, exts)
+                for sub in glob.glob(os.path.join(LG.LOGIN["claim_dir"], "*")):
+                    pending += LG._glob_inputs(sub, exts)
                 if not pending:
-                    self.after(0, lambda: self._show_status(f"ไม่มี .zip ใน {input_dir}/", "#e67e22"))
+                    ext_txt = "/".join(exts)
+                    self.after(0, lambda: self._show_status(f"ไม่มีไฟล์ {ext_txt} ใน {input_dir}/", "#e67e22"))
                     return
 
                 LG.STATS["done"] = 0
