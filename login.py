@@ -2031,6 +2031,33 @@ def handle_login_failed(device, serial, base):
     device = M.disable_root(device)
 
 
+def _decide_find_export(base, found):
+    """กติกา export ตอนเปิด find/find_treasure (ใช้ร่วมทั้งโหมดปกติ + login-new):
+    ทิ้งชื่อ +item+ เดิมทั้งหมด เหลือเฉพาะส่วนใน [ ] แล้ว add เฉพาะชื่อที่สแกนได้รอบนี้
+    เจอ → (ชื่อที่สแกนได้ + [ID], id-found) | ไม่เจอ/ติด extra-check → ([ID], not-found)"""
+    _, id_suffix = _split_orig_name(base)          # เก็บเฉพาะส่วน [ID] ท้าย (ยกเว้นพวกใน [ ])
+    hit_names, extra_ok = [], True
+    if step_on("find_treasure"):
+        for e in load_treasure_entries():          # treasure ก่อน (ตามลำดับ config)
+            if e["name"] in found and e["name"] not in hit_names:
+                hit_names.append(e["name"])
+        ex = str(LOGIN.get("extra_sombut", "")).strip()
+        if LOGIN.get("extra_check_sombut") and ex:
+            req = _treasure_required_names(ex)   # แปลง search→output name ก่อนเทียบ found
+            extra_ok = extra_ok and bool({f.lower() for f in found} & req)
+    if step_on("find"):
+        for n in load_fin_names():                 # find-pet ต่อท้าย
+            if n in found and n not in hit_names:
+                hit_names.append(n)
+        ex = str(LOGIN.get("extra_pet", "")).strip()
+        if LOGIN.get("extra_check_pet") and ex:
+            extra_ok = extra_ok and (ex.lower() in {f.lower() for f in found})
+    if hit_names and extra_ok:
+        out_name = ("+".join(hit_names) + "+" + id_suffix) if id_suffix else "+".join(hit_names)
+        return out_name, LOGIN["found_dir"]
+    return (id_suffix or base), LOGIN["not_found_dir"]   # ไม่เจอ → เหลือแค่ [ID]
+
+
 # ═══════════════════════════════════════════════════════════════════════
 #  ทำงาน 1 บัญชี : restore → start → event → box → maxgacha → export
 #  (ระหว่าง login เจอ login-failed → เก็บเข้า login-failed/ แล้วไป id ถัดไป)
@@ -2162,41 +2189,34 @@ def process_account(device, serial, zpath):
     #    maxgacha: เจอ item → backup-id (ชื่อ = item + เดิม) | สุ่มไม่ได้อะไรเลย → random-Fail (ชื่อเดิม)
     #    ไม่งั้น → กติกา trader (decide_login_export)
     if step_on("login_new"):
-        # login-new export: เขียน .txt ชื่อเดิม + credential เดิม → login-success/ แล้วจบ
+        # login-new export: เขียน .txt credential เดิม → ปลายทางตามผล find (ถ้าเปิด)
+        #   เปิด find/find_treasure → กติกาเดียวกับโหมดปกติ: เจอ → id-found (ชื่อที่สแกนได้ + [ID])
+        #                             | ไม่เจอ/ติด extra-check → not-found ([ID])
+        #   ไม่เปิด → ชื่อเดิม → login-success/ เหมือนเดิม
         M.close_app(device)
-        out_dir = _shard_dir(LOGIN["output_dir"])   # login-success
+        if step_on("find") or step_on("find_treasure"):
+            out_name, out_dir = _decide_find_export(base, found)
+        else:
+            out_name, out_dir = os.path.splitext(name)[0], LOGIN["output_dir"]
+        out_dir = _shard_dir(out_dir)   # แบ่งเป็น part-XXXX กันไฟล์กระจุกจน Explorer ค้าง
+
+        # ── web_item: จดชื่อ set ที่เจอ → อัปเดตหน้าเว็บสถิติ (เหมือน export ปกติ) ──
+        if step_on("web_item"):
+            try:
+                if WEB.record(out_name, out_dir):
+                    M.log(serial, "  🌐 อัปเดตสถิติ web-item/index.html", Fore.CYAN)
+            except Exception as e:
+                M.log(serial, f"  ⚠️ web_item บันทึกไม่ได้: {e}", Fore.YELLOW)
+
         email, password = login_new_creds if login_new_creds else (None, None)
-        txt = _export_login_new_txt(os.path.splitext(name)[0], out_dir, email, password)
+        txt = _export_login_new_txt(out_name, out_dir, email, password)
         M.log(serial, f"✅ login-new → {txt}", Fore.GREEN)
         M.log(serial, f"└─ เสร็จบัญชี (login-new): {name}", Fore.GREEN)
         return True
     if step_on("export"):
         if step_on("find") or step_on("find_treasure"):
-            # find-treasure (ก่อน) + find-pet — รีชื่อก่อน export กันชื่อยาวสะสม:
-            #   ทิ้งชื่อ +item+ เดิมทั้งหมด เหลือเฉพาะส่วนใน [ ] แล้ว add เฉพาะชื่อที่สแกนได้รอบนี้
-            #   เจอ → id-found (ชื่อที่สแกนได้ + [ID]) | ไม่เจอ/ติด extra-check → not-found (เหลือแค่ [ID])
-            _, id_suffix = _split_orig_name(base)          # เก็บเฉพาะส่วน [ID] ท้าย (ยกเว้นพวกใน [ ])
-            hit_names, extra_ok = [], True
-            if step_on("find_treasure"):
-                for e in load_treasure_entries():          # treasure ก่อน (ตามลำดับ config)
-                    if e["name"] in found and e["name"] not in hit_names:
-                        hit_names.append(e["name"])
-                ex = str(LOGIN.get("extra_sombut", "")).strip()
-                if LOGIN.get("extra_check_sombut") and ex:
-                    req = _treasure_required_names(ex)   # แปลง search→output name ก่อนเทียบ found
-                    extra_ok = extra_ok and bool({f.lower() for f in found} & req)
-            if step_on("find"):
-                for n in load_fin_names():                 # find-pet ต่อท้าย
-                    if n in found and n not in hit_names:
-                        hit_names.append(n)
-                ex = str(LOGIN.get("extra_pet", "")).strip()
-                if LOGIN.get("extra_check_pet") and ex:
-                    extra_ok = extra_ok and (ex.lower() in {f.lower() for f in found})
-            if hit_names and extra_ok:
-                out_name = ("+".join(hit_names) + "+" + id_suffix) if id_suffix else "+".join(hit_names)
-                out_dir = LOGIN["found_dir"]
-            else:
-                out_name, out_dir = (id_suffix or base), LOGIN["not_found_dir"]   # ไม่เจอ → เหลือแค่ [ID]
+            # find-treasure (ก่อน) + find-pet — รีชื่อก่อน export กันชื่อยาวสะสม (กติกาใน _decide_find_export)
+            out_name, out_dir = _decide_find_export(base, found)
         elif step_on("maxgacha"):
             if found:
                 out_name, out_dir = _combine_name(base, found), LOGIN["backup_id_dir"]
