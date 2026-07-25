@@ -3,10 +3,11 @@
     "first_loop": 1,
     "play": 1,
     "event": 1,
-    "boxes": 1,
-    "check_ruby": 1,
-    "get_item": 1,
-    "get_pet": 0
+    "boxes": 0,
+    "check_ruby": 0,
+    "get_item": 0,
+    "get_pet": 0,
+    "play_lv5": 1
   },
   "event_rounds": 3,
   "config_name": "ozx",

@@ -13,7 +13,7 @@ CONFIGMAIN = os.path.join(os.path.dirname(os.path.abspath(__file__)), "configmai
 # ── default config (ตรงกับ config.py) ──
 DEFAULT_STEPS = {
     "first_loop": 1, "play": 1, "event": 1, "boxes": 1,
-    "check_ruby": 0, "get_item": 1, "get_pet": 1,
+    "check_ruby": 0, "get_item": 1, "get_pet": 1, "play_lv5": 0,
 }
 STEP_LABELS = {
     "first_loop": "ลบไฟล์ตอนเริ่ม",
@@ -23,6 +23,7 @@ STEP_LABELS = {
     "check_ruby": "Check Ruby (OCR)",
     "get_item":   "สุ่มของ Get-Item",
     "get_pet":    "สุ่มเพ็ท Get-Pet",
+    "play_lv5":   "Play-Lv5 (เล่นถึง lv-5 → lv-5norandom-[uid].txt)",
 }
 
 

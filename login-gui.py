@@ -35,6 +35,8 @@ STEP_LABELS = {
 # เปิด find/find_treasure → ปิด step พวกนี้อัตโนมัติ (ต้องรันเดี่ยวๆ) — box เปิดพร้อมได้
 FIND_STEPS = ("find", "find_treasure")
 FIND_EXCLUSIVE = ("maxgacha", "maxpet")
+# step หลักที่เปิดตลอด — ไม่โชว์ toggle ใน UI (แต่ยังเซฟ/รันตามค่า default = เปิด)
+HIDDEN_STEPS = ("clean", "restore", "event", "export")
 # ค่า default ที่ GUI จัดการ (นอกจาก steps) — path ต่างๆ ไม่แตะ เก็บไว้ในไฟล์ตามเดิม
 GUI_DEFAULTS = {"event_rounds": 2, "start_wait": 15,
                 "extra_check_pet": 0, "extra_pet": "",
@@ -106,30 +108,42 @@ class ConfigWindow(ctk.CTkToplevel):
         self.step_switches = {}
         frame_steps = ctk.CTkFrame(self, fg_color="transparent")
         frame_steps.pack(fill="x", padx=16, pady=(0, 8))
+        STEP_COLS = 2   # จัด toggle เป็น 2 คอลัมน์แนวนอน (เตี้ยลง ดูง่าย)
+        col_i = 0       # ตำแหน่ง grid เฉพาะสวิตช์ที่โชว์ (ข้าม hidden ไม่ให้เกิดช่องว่าง)
         for key in DEFAULT_STEPS:
-            var = ctk.BooleanVar(value=bool(cfg["steps"].get(key, 0)))
+            hidden = key in HIDDEN_STEPS
+            # hidden → บังคับค่า default (เปิด) ไว้เลย | ปกติ → ตามค่าใน config
+            var = ctk.BooleanVar(value=bool(DEFAULT_STEPS.get(key, 1) if hidden else cfg["steps"].get(key, 0)))
             self.step_vars[key] = var
+            if hidden:
+                continue   # ซ่อนจาก UI แต่ยังอยู่ใน step_vars → เซฟตามปกติ
             sw = ctk.CTkSwitch(frame_steps, text=STEP_LABELS.get(key, key),
                                variable=var, font=("Segoe UI", 12),
                                switch_width=40, switch_height=20,
                                command=(self._apply_find_lock if key in FIND_STEPS else None))
-            sw.pack(anchor="w", pady=3)
+            r, c = divmod(col_i, STEP_COLS)
+            sw.grid(row=r, column=c, sticky="w", padx=(0, 20), pady=3)
             self.step_switches[key] = sw
+            col_i += 1
         self._apply_find_lock()   # ตั้งสถานะล็อกเริ่มต้นตามค่าที่โหลดมา
 
         ctk.CTkFrame(self, height=1, fg_color=("gray75", "gray35")).pack(fill="x", padx=16, pady=6)
 
-        # ── event rounds ──
-        ctk.CTkLabel(self, text="Event Loop (รอบ)", font=("Segoe UI", 12)).pack(anchor="w", padx=20)
-        self.rounds_entry = ctk.CTkEntry(self, width=80, font=("Segoe UI", 12))
+        # ── event rounds + start wait (แนวนอน แถวเดียว) ──
+        row_nums = ctk.CTkFrame(self, fg_color="transparent")
+        row_nums.pack(fill="x", padx=20, pady=(0, 6))
+        col_rounds = ctk.CTkFrame(row_nums, fg_color="transparent")
+        col_rounds.pack(side="left", padx=(0, 28))
+        ctk.CTkLabel(col_rounds, text="Event Loop (รอบ)", font=("Segoe UI", 12)).pack(anchor="w")
+        self.rounds_entry = ctk.CTkEntry(col_rounds, width=80, font=("Segoe UI", 12))
         self.rounds_entry.insert(0, str(cfg["event_rounds"]))
-        self.rounds_entry.pack(anchor="w", padx=20, pady=(2, 8))
-
-        # ── start wait ──
-        ctk.CTkLabel(self, text="รอหลัง start packet (วินาที)", font=("Segoe UI", 12)).pack(anchor="w", padx=20)
-        self.wait_entry = ctk.CTkEntry(self, width=80, font=("Segoe UI", 12))
+        self.rounds_entry.pack(anchor="w", pady=(2, 0))
+        col_wait = ctk.CTkFrame(row_nums, fg_color="transparent")
+        col_wait.pack(side="left")
+        ctk.CTkLabel(col_wait, text="รอหลัง start packet (วินาที)", font=("Segoe UI", 12)).pack(anchor="w")
+        self.wait_entry = ctk.CTkEntry(col_wait, width=80, font=("Segoe UI", 12))
         self.wait_entry.insert(0, str(cfg["start_wait"]))
-        self.wait_entry.pack(anchor="w", padx=20, pady=(2, 8))
+        self.wait_entry.pack(anchor="w", pady=(2, 0))
 
         # ── extra-checkpet (find-pet: บังคับต้องเจอชื่อนี้ ไม่งั้น → not-found) ──
         self.extra_check_pet_var = ctk.BooleanVar(value=bool(cfg["extra_check_pet"]))

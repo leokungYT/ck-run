@@ -11,8 +11,8 @@
     "maxpet": 0,
     "export": 1,
     "web_item": 0,
-    "link_devid": 0,
-    "login_new": 1,
+    "link_devid": 1,
+    "login_new": 0,
     "web_view": 0
   },
   "event_rounds": 10,

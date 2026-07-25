@@ -12,6 +12,8 @@ import shutil
 import zipfile
 import json
 import re
+import random
+import string
 import concurrent.futures
 from ppadb.client import Client as AdbClient
 from colorama import Fore, Style, init
@@ -925,6 +927,289 @@ def run_event_loops(device):
         handle_repeating(device, "fixnews.bmp")
 
 
+# ═══════════════════════════════════════════════════════════════════
+#  DEV-LINK — ผูก dev-id + สุ่ม email/password (พอร์ตจาก login.py run_link_devid)
+#  ใช้โดย play-lv5 หลังเจอ lv-5 → คืน (email, password) ที่ผูกจริง (เอาไปเขียนไฟล์)
+#  email สุ่ม (nuuboyshop+5สุ่ม@gmail.com) เพราะดึง member_id กลางเกมไม่ได้ (root ปิด)
+#  ⚠️ รูปใน img/devid/: dev1-10 checkpointdev1 password1 password2 (.bmp)
+# ═══════════════════════════════════════════════════════════════════
+DEVID_DIR = "img/devid"
+DEVID_CHECKPOINT = "checkpointdev1.bmp"
+DEVID_CHECKPOINT_TIMEOUT = 30
+DEVID_CHECKPOINT_SETTLE = 8       # หลังเจอ checkpointdev1 → delay ให้จอนิ่งก่อน swipe
+DEVID_SWIPE = (472, 349, 507, 259)
+DEVID_SWIPE_MS = 300
+DEVID_STEP_DELAY = 0.6
+
+
+def _dev_rand_email():
+    """สุ่ม email: nuuboyshop + 5 ตัว (a-z0-9 ไม่ซ้ำ) + @gmail.com"""
+    tail = "".join(random.sample(string.ascii_lowercase + string.digits, 5))
+    return f"nuuboyshop{tail}@gmail.com"
+
+
+def _dev_rand_password(length=10):
+    """สุ่ม password length ตัว (a-zA-Z0-9) บังคับมีทั้งเลขและตัวอักษร — ปลอดภัยกับ input text"""
+    pool = string.ascii_letters + string.digits
+    while True:
+        pw = "".join(random.choice(pool) for _ in range(length))
+        if any(c.isdigit() for c in pw) and any(c.isalpha() for c in pw):
+            return pw
+
+
+def _devid_click(device, name, post_delay=DEVID_STEP_DELAY):
+    return wait_and_click(device, name, required=False, post_delay=post_delay, folder=DEVID_DIR)
+
+
+def _devid_wait_appear(device, name, timeout):
+    """รอ name (img/devid) โผล่ (detect ไม่กด) ภายใน timeout → True/False"""
+    start = time.time()
+    while time.time() - start < timeout:
+        if not bot_running:
+            return False
+        if ImgSearchADB(fast_screencap(device), img_path(name, DEVID_DIR)):
+            return True
+        time.sleep(0.3)
+    return False
+
+
+def run_dev_link(device):
+    """ผูก dev-id: dev1-4 → checkpointdev1 → swipe → dev5-6 → email → dev7
+    → password1(สุ่ม pw10) → password2(pw เดิม) → dev8-10. คืน (email, password) | None ถ้าถูกหยุด"""
+    serial = device.serial
+    log(serial, "=== DEV-LINK (play-lv5) ===", Fore.GREEN)
+
+    # dev1 → dev4
+    for i in range(1, 5):
+        if not bot_running:
+            return None
+        _devid_click(device, f"dev{i}.bmp")
+
+    # รอ checkpointdev1 → delay → swipe
+    if _devid_wait_appear(device, DEVID_CHECKPOINT, DEVID_CHECKPOINT_TIMEOUT):
+        log(serial, f"เจอ {DEVID_CHECKPOINT} → delay {DEVID_CHECKPOINT_SETTLE}s แล้ว swipe", Fore.GREEN)
+        time.sleep(DEVID_CHECKPOINT_SETTLE)
+    else:
+        log(serial, f"⚠️ ไม่เจอ {DEVID_CHECKPOINT} → swipe แล้วไปต่อ", Fore.YELLOW)
+    if not bot_running:
+        return None
+    x1, y1, x2, y2 = DEVID_SWIPE
+    device.shell(f"input swipe {x1} {y1} {x2} {y2} {DEVID_SWIPE_MS}")
+    time.sleep(DEVID_STEP_DELAY)
+
+    # dev5 → dev6
+    _devid_click(device, "dev5.bmp")
+    _devid_click(device, "dev6.bmp")
+
+    # email → กรอก → dev7
+    email = _dev_rand_email()
+    log(serial, f"สุ่ม email = {email}", Fore.GREEN)
+    device.shell(f"input text '{email}'")
+    time.sleep(DEVID_STEP_DELAY)
+    _devid_click(device, "dev7.bmp")
+
+    # password1 → กรอก pw10 | password2 → กรอก pw เดิม
+    password = _dev_rand_password(10)
+    _devid_click(device, "password1.bmp", post_delay=0.5)
+    log(serial, f"สุ่ม password = {password}", Fore.GREEN)
+    device.shell(f"input text '{password}'")
+    time.sleep(DEVID_STEP_DELAY)
+    _devid_click(device, "password2.bmp", post_delay=0.5)
+    device.shell(f"input text '{password}'")
+    time.sleep(DEVID_STEP_DELAY)
+
+    # dev8 → dev10
+    for i in range(8, 11):
+        if not bot_running:
+            return None
+        _devid_click(device, f"dev{i}.bmp")
+
+    return email, password
+
+
+# ═══════════════════════════════════════════════════════════════════
+#  STEP: play-lv5 — เล่นจนถึง lv-5 (เปิดด้วย steps.play-lv5 = 1) ทำหลัง event loop
+#  รูปอยู่ img/play-lv5/*
+#    start:    play1 → play2 → play3 → กด play3 ซ้ำ 10 ครั้ง
+#    buy item: play4 → play5 → กด play5 ซ้ำ 10 ครั้ง → play6 → play7 → play8 → play7fix1 → play7fix2 → play7fix3
+#              → รอ wait-step1 ค้าง 5 วิ → กด wait-stepok1
+#    loop:     วน playloop1 → playloop2(5s ข้าม) → playloop3-5 → เช็ค lv-check(3s)/playloop6(5s)
+#              เจอ popup → หา lv-5 ก่อน: เจอ lv-5 → lv-5ok1/2/3 → dev-link (จบ)
+#              ยังไม่ถึง lv-5 → กด playloop6 (Confirm) ปิด popup | ไม่มี popup → playloop7 แล้ววนใหม่
+# ═══════════════════════════════════════════════════════════════════
+PLAY_LV5_DIR = "img/play-lv5"
+LV5_SPAM_TIMES = 10           # กด play3 / play5 ซ้ำกี่ครั้ง
+LV5_WAIT_STEP1_HOLD = 5       # wait-step1 ต้องค้างกี่วิ ก่อนกด wait-stepok1
+LV5_SKIP_TIMEOUT = 5          # playloop2/6/7: ไม่เจอกี่วิ → ข้าม
+LV5_LOOP_TIMEOUT = 4          # playloop1/3/4/5: ไม่เจอกี่วิ → ข้าม (สั้นลงจาก 10s กันค้างนานตอน popup บังจอ)
+LV5_CHECK_TIMEOUT = 3         # lv-check: เช็คหน้า level-up กี่วิ (ไม่เจอ → ลองหา playloop6 ต่อ)
+LV5_MATCH_THRESHOLD = 0.95    # lv-5.bmp: match เข้มขึ้น (กันเจอผิด) — เจอถึงจะนับว่าถึง lv-5
+
+
+def _lv5_seen(device, name, threshold=C.MATCH_THRESHOLD):
+    return bool(ImgSearchADB(fast_screencap(device), img_path(name, PLAY_LV5_DIR), threshold))
+
+
+def _lv5_click(device, name, timeout=C.PLAY_STEP_TIMEOUT, post_delay=1.0):
+    """คลิกรูปใน play-lv5 (required=False → ไม่เจอก็ข้าม). คืน True ถ้าคลิก"""
+    return wait_and_click(device, name, timeout=timeout, required=False,
+                          post_delay=post_delay, folder=PLAY_LV5_DIR)
+
+
+def _lv5_spam(device, name, times, appear_timeout=C.PLAY_STEP_TIMEOUT, tap_delay=0.4):
+    """รอ name โผล่ → หาตำแหน่งครั้งเดียว → tap ตำแหน่งนั้นรัว times ครั้ง (เร็ว, ไม่ค้นรูปซ้ำ)
+    → กดครบแล้วหยุดทันที ไปขั้นถัดไป. ไม่เจอ name ใน appear_timeout → ข้าม"""
+    if not _lv5_wait_appear(device, name, appear_timeout):
+        log(device.serial, f"ไม่เจอ {name} ใน {appear_timeout}s → ข้ามการกดซ้ำ", Fore.YELLOW)
+        return
+    pts = ImgSearchADB(fast_screencap(device), img_path(name, PLAY_LV5_DIR))
+    if not pts:
+        return
+    x, y = pts[0]
+    log(device.serial, f"กด {name} ซ้ำ {times} ครั้ง ที่ ({x},{y})", Fore.CYAN)
+    for _ in range(times):
+        if not bot_running:
+            return
+        tap(device, x, y)
+        time.sleep(tap_delay)
+
+
+def _lv5_wait_appear(device, name, timeout):
+    """รอ name โผล่ (detect ไม่กด) ภายใน timeout → True/False"""
+    start = time.time()
+    while time.time() - start < timeout:
+        if not bot_running:
+            return False
+        if _lv5_seen(device, name):
+            return True
+        time.sleep(0.3)
+    return False
+
+
+def _lv5_held(device, name, hold):
+    """name ค้างต่อเนื่องครบ hold วิ → True (ไม่เจอ/หายกลางทาง → False)"""
+    if not _lv5_seen(device, name):
+        return False
+    start = time.time()
+    while time.time() - start < hold:
+        if not bot_running:
+            return False
+        if not _lv5_seen(device, name):
+            return False
+        time.sleep(0.3)
+    return True
+
+
+def _lv5_click_until_gone(device, name, absent=3.0, first_wait=10.0, max_secs=40, post_delay=0.4):
+    """กด name (play-lv5) รัวๆ จน 'หายจากจอ' ติดต่อกัน absent วิ → คืน True
+    ไม่เจอเลยใน first_wait วิแรก → คืน False (ข้าม) | ชน max_secs → หยุด"""
+    path = img_path(name, PLAY_LV5_DIR)
+    start = time.time()
+    last_seen = None
+    while bot_running and time.time() - start < max_secs:
+        pts = ImgSearchADB(fast_screencap(device), path)
+        if pts:
+            tap(device, *pts[0])
+            log(device.serial, f"กด {name} ที่ {pts[0]}", Fore.CYAN)
+            last_seen = time.time()
+            time.sleep(post_delay)
+            continue
+        if last_seen is None:
+            if time.time() - start >= first_wait:
+                return False              # ยังไม่เคยเจอ → ข้าม
+        elif time.time() - last_seen >= absent:
+            return True                   # เคยเจอแล้วหายครบ absent วิ → จบ
+        time.sleep(0.3)
+    return last_seen is not None
+
+
+def run_play_lv5(device):
+    """เล่นจนเจอ lv-5 → กด lv-5ok1/2/3 → ผูก dev-id → คืน (email, password) ที่ผูก
+    (ให้ process_device เขียน lv-5norandom-[uid].txt). คืน None ถ้าถูกหยุดก่อนเจอ"""
+    serial = device.serial
+    log(serial, "=== PLAY-LV5 ===", Fore.GREEN)
+
+    # ── #step start: play1 → play2 → play3 → กด play3 ซ้ำ 10 ครั้ง (แล้วหยุด ไป play4) ──
+    _lv5_click(device, "play1.bmp", post_delay=1.5)
+    _lv5_click(device, "play2.bmp", post_delay=1.5)
+    _lv5_spam(device, "play3.bmp", LV5_SPAM_TIMES)
+
+    # ── #loop buy item: play4 → play5 → กด play5 ซ้ำ 10 ครั้ง → play6 → play7 → play8 ──
+    _lv5_click(device, "play4.bmp", post_delay=1.0)
+    _lv5_spam(device, "play5.bmp", LV5_SPAM_TIMES)
+    _lv5_click(device, "play6.bmp", post_delay=1.0)
+    _lv5_click(device, "play7.bmp", post_delay=1.0)
+    _lv5_click(device, "play8.bmp", post_delay=1.0)
+    _lv5_click(device, "play7fix1.bmp", post_delay=1.0)
+    _lv5_click(device, "play7fix2.bmp", post_delay=1.0)
+    _lv5_click(device, "play7fix3.bmp", post_delay=1.0)
+
+    # รอ wait-step1 ค้างครบ 5 วิ → กด wait-stepok1
+    log(serial, f"รอ wait-step1 ค้างครบ {LV5_WAIT_STEP1_HOLD}s...", Fore.CYAN)
+    start = time.time()
+    while bot_running and not _lv5_held(device, "wait-step1.bmp", LV5_WAIT_STEP1_HOLD):
+        if time.time() - start > C.LOOP_MAX_SECS:
+            log(serial, "wait-step1 ไม่ค้างครบในเวลาที่กำหนด → ไปต่อ", Fore.YELLOW)
+            break
+        time.sleep(0.3)
+    # กด wait-stepok1 ซ้ำๆ จนหายจากจอ (ครบ 3 วิ) แล้วค่อยไป loop play
+    _lv5_click_until_gone(device, "wait-stepok1.bmp", absent=3.0)
+
+    # ── #loop play: วน playloop1-7 จนกว่าจะเจอ lv-5 ──
+    while bot_running:
+        _lv5_click(device, "playloop1.bmp", timeout=LV5_LOOP_TIMEOUT, post_delay=1.0)
+        _lv5_click(device, "playloop2.bmp", timeout=LV5_SKIP_TIMEOUT, post_delay=1.0)   # 5s ไม่เจอข้าม
+        _lv5_click(device, "playloop3.bmp", timeout=LV5_LOOP_TIMEOUT, post_delay=1.0)
+        _lv5_click(device, "playloop4.bmp", timeout=LV5_LOOP_TIMEOUT, post_delay=1.0)
+        _lv5_click(device, "playloop5.bmp", timeout=LV5_LOOP_TIMEOUT, post_delay=1.0)
+
+        # หลัง playloop5: เช็คหน้า level-up — lv-check (3s) หรือ playloop6 (Confirm, 5s)
+        # เจอ popup → "หา lv-5 ก่อน": ถึง lv-5 → lv-5ok / ยังไม่ถึง → กด playloop6 (Confirm) ปิด popup
+        if (_lv5_wait_appear(device, "lv-check.bmp", LV5_CHECK_TIMEOUT)
+                or _lv5_wait_appear(device, "playloop6.bmp", LV5_SKIP_TIMEOUT)):
+            if _lv5_seen(device, "lv-5.bmp", LV5_MATCH_THRESHOLD):
+                log(serial, "⭐ เจอ lv-5 → กด lv-5ok1/2/3", Fore.GREEN)
+                _lv5_click(device, "lv-5ok1.bmp", post_delay=1.0)
+                _lv5_click(device, "lv-5ok2.bmp", post_delay=1.0)
+                _lv5_click(device, "lv-5ok3.bmp", post_delay=1.0)
+                return run_dev_link(device)   # ผูก dev-id → (email,password) → export lv-5norandom-[uid].txt
+            # ยังไม่ถึง lv-5 → กด playloop6 (Confirm) ปิด popup Level Up → เล่นต่อ
+            log(serial, "ยังไม่ถึง lv-5 → กด playloop6 (Confirm) ปิด popup", Fore.CYAN)
+            _lv5_click(device, "playloop6.bmp", timeout=LV5_SKIP_TIMEOUT, post_delay=1.0)
+        else:
+            # ไม่เจอ lv-check/playloop6 (ไม่มี popup) → playloop7
+            _lv5_click(device, "playloop7.bmp", timeout=LV5_SKIP_TIMEOUT, post_delay=1.0)
+        # วนกลับไป playloop1 ใหม่
+
+    return None
+
+
+def export_lv5_txt(device, email, password):
+    """ดึง member_id (uid) จาก Cocos2dxPrefsFile.xml → เขียน lv-5norandom-[uid].txt ใน backup/
+    เนื้อไฟล์ = credential ที่ผูก (-email/password). ต้องเปิด root มาก่อน. คืน path หรือ None"""
+    serial = device.serial
+    safe = serial.replace(".", "_").replace(":", "_")
+    tmp = os.path.join(C.BACKUP_DIR, f"_lv5tmp_{safe}")
+    os.makedirs(tmp, exist_ok=True)
+    mid = None
+    local = os.path.join(tmp, C.MEMBER_ID_FILE)
+    if pull_file(serial, f"{C.SHARED_PREFS_DIR}/{C.MEMBER_ID_FILE}", local):
+        mid = extract_member_id(local)
+    shutil.rmtree(tmp, ignore_errors=True)
+    uid = mid or "unknown"
+    os.makedirs(C.BACKUP_DIR, exist_ok=True)
+    base = f"lv-5norandom-[{uid}]"
+    path = os.path.join(C.BACKUP_DIR, base + ".txt")
+    i = 2
+    while os.path.exists(path):
+        path = os.path.join(C.BACKUP_DIR, f"{base}_{i}.txt")
+        i += 1
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(f"-{email}/{password}\n")
+    log(serial, f"✅ play-lv5 → {os.path.basename(path)}", Fore.GREEN)
+    return path
+
+
 def run_boxes(device):
     """#รับของ : box1 → box5"""
     log(device.serial, "=== รับของ (box1-5) ===", Fore.GREEN)
@@ -1221,6 +1506,20 @@ def process_device(serial_or_device):
             # 3) event-back → git-item → ok-gifitem
             if step_on("event"):
                 run_event_loops(device)
+
+            # 3.5) play-lv5 — เล่นจนถึง lv-5 (ถ้าเปิด) → ผูก dev-id → export lv-5norandom-[uid].txt → เริ่มรอบใหม่
+            #      (ข้าม box/get-item/get-pet/finalize — play-lv5 มี export ของตัวเอง)
+            if step_on("play_lv5"):
+                lv5_creds = run_play_lv5(device)   # (email, password) ถ้าเจอ lv-5 + ผูก dev-id | None
+                close_app(device)
+                device = enable_root(device)
+                if lv5_creds:
+                    export_lv5_txt(device, lv5_creds[0], lv5_creds[1])
+                delete_account_files(device)
+                device = disable_root(device)
+                log(device.serial, "จบ play-lv5 → เริ่มรอบใหม่", Fore.GREEN)
+                time.sleep(3)
+                continue
 
             # 4) รับของ box1-5
             if step_on("boxes"):

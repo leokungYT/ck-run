@@ -32,6 +32,7 @@ STEPS = {
     "check_ruby": 0,   # เช็ค/OCR เลข ruby หลัง box ก่อน get-item (ต้องใช้ easyocr)
     "get_item":   1,   # สุ่มของ get-item
     "get_pet":    1,   # สุ่มเพ็ท get-pet
+    "play_lv5":   0,   # เล่นจนถึง lv-5 (หลัง event loop) → export lv-5norandom-[uid].txt (รูป img/play-lv5/)
 }
 
 # ── Check-Ruby (OCR เลขก่อน get-item) ────────────────────────────────
