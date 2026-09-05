@@ -380,6 +380,35 @@ def load_template(path):
     return t
 
 
+# cv2 5.x ถอด groupRectangles ออกจาก namespace หลัก → เตรียม fallback เขียนเองไว้
+_HAS_GROUP_RECTS = hasattr(cv2, "groupRectangles")
+if not _HAS_GROUP_RECTS:
+    print(f"{Fore.YELLOW}[WARN] cv2 {cv2.__version__} ไม่มี groupRectangles "
+          f"→ ใช้ตัวรวม rect ที่เขียนเอง{Style.RESET_ALL}")
+
+
+def _group_rects(rects, eps=1.0):
+    """รวม rect ที่ทับกันให้เหลือตัวแทนกลุ่มละตัว (แทน cv2.groupRectangles)
+    เกณฑ์เดียวกับ cv2: ห่างกันไม่เกิน eps*0.5*(w1+w2) ทั้งแกน x และ y → กลุ่มเดียวกัน
+    คืนค่าเฉลี่ยของแต่ละกลุ่ม เหมือน cv2 (rect ที่ส่งเข้ามาซ้ำ 2 ตัวจะยุบเป็นตัวเดียว)"""
+    groups = []   # [sum_x, sum_y, sum_w, sum_h, n]
+    for x, y, w, h in rects:
+        for g in groups:
+            n = g[4]
+            cx, cy, cw, ch = g[0] / n, g[1] / n, g[2] / n, g[3] / n
+            if abs(x - cx) <= eps * 0.5 * (w + cw) and abs(y - cy) <= eps * 0.5 * (h + ch):
+                g[0] += x
+                g[1] += y
+                g[2] += w
+                g[3] += h
+                g[4] += 1
+                break
+        else:
+            groups.append([x, y, w, h, 1])
+    return [(int(round(g[0] / g[4])), int(round(g[1] / g[4])),
+             int(round(g[2] / g[4])), int(round(g[3] / g[4]))) for g in groups]
+
+
 def _match_template(img_gray, path, threshold):
     tpl = load_template(path)
     if tpl is None:
@@ -394,7 +423,10 @@ def _match_template(img_gray, path, threshold):
         rect = [int(loc[0]), int(loc[1]), nw, nh]
         rects.append(rect)
         rects.append(rect)
-    rects, _ = cv2.groupRectangles(rects, groupThreshold=1, eps=1)
+    if _HAS_GROUP_RECTS:
+        rects, _ = cv2.groupRectangles(rects, groupThreshold=1, eps=1)
+    else:
+        rects = _group_rects(rects, eps=1.0)
     inv = 1.0 / SCREENCAP_SCALE if SCREENCAP_SCALE != 1.0 else 1.0
     return [(int((x + w / 2) * inv), int((y + h / 2) * inv)) for (x, y, w, h) in rects]
 
@@ -801,7 +833,7 @@ def reserve_zip_path(zip_name, subdir=None):
 
 def export_backup_zip(device, zip_name, ruby=None, subdir=None):
     """ดึง shared_prefs + files ทั้งหมด แล้ว zip เก็บไว้ใน backup/<subdir>/<zip_name>.zip
-    ถ้ามี ruby (เลขจาก check-ruby) จะต่อท้ายเป็น [ruby] เช่น name+[ID]+[315].zip
+    ถ้ามี ruby (เลขจาก check-ruby) จะต่อท้ายเป็น [R=<เลข>] เช่น name+[ID]+[R=110].zip
     subdir = โฟลเดอร์ย่อย (เช่น 'find-2') ถ้า None = เก็บใน backup/ ตรงๆ"""
     serial = device.serial
     safe = serial.replace(".", "_").replace(":", "_")
@@ -838,11 +870,11 @@ def export_backup_zip(device, zip_name, ruby=None, subdir=None):
     else:
         log(serial, "  ⚠️ อ่าน member_id ไม่ได้", Fore.YELLOW)
 
-    # ── ต่อท้ายเลข ruby (จาก check-ruby) → name+[ID]+[315] ──
+    # ── ต่อท้ายเลข ruby (จาก check-ruby) → name+[ID]+[R=110] ──
     if ruby:
         sep = "" if zip_name.endswith("+") else "+"
-        zip_name = f"{zip_name}{sep}[{ruby}]"
-        log(serial, f"  ruby = {ruby}", Fore.GREEN)
+        zip_name = f"{zip_name}{sep}[R={ruby}]"
+        log(serial, f"  ruby = {ruby} → ต่อท้ายชื่อ [R={ruby}]", Fore.GREEN)
 
     # ตั้งชื่อสะอาด: <name>.zip, <name>_2.zip ... (atomic กัน thread ชนกัน)
     zip_path = reserve_zip_path(zip_name, subdir)

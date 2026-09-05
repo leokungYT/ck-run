@@ -38,7 +38,7 @@ STEPS = {
 # ── Check-Ruby (OCR เลขก่อน get-item) ────────────────────────────────
 # เปิดด้วย steps.check_ruby = 1 → หลัง box จบจะหา checkpoint-ruby.bmp
 # เจอแล้ว OCR ตัวเลขที่ RUBY_REGION เก็บไว้ แล้วเอาไปต่อท้ายชื่อ zip
-#   ตัวอย่าง: headking+trader+[NXSGM1082]+[315].zip   (315 = เลข ruby)
+#   ตัวอย่าง: headking+trader+[NXSGM1082]+[R=315].zip   (315 = เลข ruby)
 RUBY_REGION = (272, 12, 54, 31)   # (x, y, w, h) ตำแหน่งเลขบนจอ (w=54 ตัดปุ่ม + สีเขียวออก กัน OCR อ่านเป็นเลข)
 RUBY_CHECK_TIMEOUT = 10           # รอ checkpoint-ruby.bmp โผล่กี่วิ (ไม่เจอ → ข้าม)
 

@@ -11,7 +11,7 @@ login.py — Cookie Run "login-refresh" แบบ batch
   5) maxpet  : run_maxpet (กด pet1 → swipe 5 รอบ → สุ่มเพ็ทจนเจอ trader) [ถ้า maxpet=1]
   6) export  : เปิด root → ดึงไฟล์บัญชี (เหมือนตอน backup เจอ id) → zip เก็บตามผล
                (เจอ item→backup-id | ไม่เจอ→random-Fail | ปิด maxgacha/maxpet→login-success) → ปิด root
-  7) ลบ zip ต้นทางทิ้ง แล้วไปหยิบไฟล์ถัดไปจาก input-id/ (ไม่เก็บ _done — export แยกไปแล้ว)
+  7) ลบ zip ต้นทางทิ้ง แล้วไปหยิบไฟล์ถัด ไปจาก input-id/ (ไม่เก็บ _done — export แยกไปแล้ว)
 
 engine (คลิกรูป / ADB / root toggle / event / boxes / get-pet / pull) ใช้ซ้ำจาก main.py
 ตัว restore (push ไฟล์กลับ) พอร์ตมาจาก push-file-ck/push-file.py
@@ -310,8 +310,9 @@ def reserve_out_path(out_dir, base):
         return path
 
 
-def export_login_zip(device, out_name, out_dir):
-    """ดึง shared_prefs + files ทั้งหมด แล้ว zip เก็บใน out_dir/out_name.zip"""
+def export_login_zip(device, out_name, out_dir, ruby=None):
+    """ดึง shared_prefs + files ทั้งหมด แล้ว zip เก็บใน out_dir/out_name.zip
+    ถ้ามี ruby (เลขจาก check-ruby) ต่อท้ายสุดเป็น [R=<เลข>] → <ชื่อ>+[ID]+[R=110]"""
     serial = device.serial
     os.makedirs(out_dir, exist_ok=True)
     # staging ไว้ใน temp ของระบบ (ไม่ใช่ใน out_dir) → ไม่มีขยะ _tmp ค้างปนไฟล์ผลลัพธ์
@@ -347,6 +348,11 @@ def export_login_zip(device, out_name, out_dir):
                 M.log(serial, f"  เจาะ member_id = {member_id} → ต่อท้ายชื่อ", Fore.GREEN)
             else:
                 M.log(serial, f"  ⚠️ อ่าน member_id จาก {C.MEMBER_ID_FILE} ไม่ได้ → ชื่อไม่มี [ID]", Fore.YELLOW)
+
+        # ── ต่อท้ายเลข ruby ท้ายสุด (หลัง [ID]) → <ชื่อ>+[ID]+[R=110] ──
+        if ruby:
+            out_name = f"{out_name.rstrip('+')}+[R={ruby}]"
+            M.log(serial, f"  ruby = {ruby} → ต่อท้ายชื่อ [R={ruby}]", Fore.GREEN)
 
         zip_path = reserve_out_path(out_dir, out_name)
         with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
@@ -785,6 +791,10 @@ def run_link_devid(device, base, zpath):
 LOGINNEW_DIR = "img/devid"        # loginnew1-4 / fixplay1-4 อยู่ใน img/devid/ (play1-4 อยู่ img/ root)
 LOGINNEW_PLAY1_POS = (419, 282)   # ตำแหน่งที่กดหลัง play1 (เหมือน main.run_play_sequence)
 LOGINNEW_STEP_DELAY = 0.6
+LOGINNEW_ICANPLAY_WAIT = 10.0     # หลัง loginnew4 รอ ican-play (img/ root) กี่วิ ก่อนไล่ fixplay1-4
+FIXPLAY1_ROUNDS = 2               # fixplay1 เช็คซ้ำกี่รอบ
+FIXPLAY1_TIMEOUT = 15.0           # fixplay1 รอบละกี่วิ
+LOGINNEW_ICANPLAY_RETRY = 15.0    # กด fixplay1 ไม่ติด → เช็ค ican-play อีกรอบกี่วิ
 
 
 def _read_cred_text(path):
@@ -816,6 +826,17 @@ def _parse_login_new_creds(path):
     return (email, password) if (email and password) else (None, None)
 
 
+def _wait_for_image(device, name, folder=C.IMG_DIR, timeout=10.0, poll=0.3):
+    """รอรูปโผล่บนจอ 'เช็คอย่างเดียว ไม่กด' → คืน True ถ้าเจอใน timeout, False ถ้าไม่เจอ/ถูกหยุด"""
+    path = M.img_path(name, folder)
+    start = time.time()
+    while M.bot_running and time.time() - start < timeout:
+        if M.ImgSearchADB(M.fast_screencap(device), path):
+            return True
+        time.sleep(poll)
+    return False
+
+
 def _click_until_gone(device, name, folder, absent=1.0, first_wait=5.0, max_secs=20, post_delay=0.3):
     """กด name (ในโฟลเดอร์ folder) รัวๆ จน 'หายจากจอ' ติดต่อกัน absent วิ → คืน True
     ไม่เจอเลยใน first_wait วิแรก → คืน False (ข้ามไป) | ชน max_secs → หยุด"""
@@ -837,6 +858,25 @@ def _click_until_gone(device, name, folder, absent=1.0, first_wait=5.0, max_secs
             return True                   # เคยเจอแล้วหายครบ absent วิ → จบ
         time.sleep(0.3)
     return last_seen is not None
+
+
+def _icanplay_then_fixplay1(device, serial, wait_s, tag):
+    """เช็ค ican-play (ไม่กด) แล้วกด fixplay1 ซ้ำ FIXPLAY1_ROUNDS รอบ
+    คืน True ถ้ากด fixplay1 ติดอย่างน้อย 1 รอบ"""
+    if _wait_for_image(device, "ican-play.png", timeout=wait_s):
+        M.log(serial, f"เจอ ican-play ({tag}) → ไป fixplay1", Fore.CYAN)
+    else:
+        M.log(serial, f"⏰ ไม่เจอ ican-play ใน {wait_s:.0f}s ({tag}) → ลอง fixplay1 ต่อ", Fore.YELLOW)
+
+    hit = False
+    for r in range(1, FIXPLAY1_ROUNDS + 1):
+        if not M.bot_running:
+            return hit
+        M.log(serial, f"fixplay1 รอบ {r}/{FIXPLAY1_ROUNDS} ({tag})", Fore.CYAN)
+        if M.wait_and_click(device, "fixplay1.bmp", folder=LOGINNEW_DIR, required=False,
+                            timeout=FIXPLAY1_TIMEOUT, post_delay=LOGINNEW_STEP_DELAY):
+            hit = True
+    return hit
 
 
 def run_login_new(device, zpath):
@@ -875,18 +915,32 @@ def run_login_new(device, zpath):
     time.sleep(LOGINNEW_STEP_DELAY)
     M.wait_and_click(device, "loginnew4.bmp", folder=LOGINNEW_DIR, required=False, post_delay=LOGINNEW_STEP_DELAY)
 
-    # fixplay1 → fixplay4 (รูปอยู่ img/devid/)
-    for i in range(1, 5):
+    # หลัง loginnew4 → เช็ค ican-play (img/ root, ไม่กด) 10s → fixplay1 ซ้ำ 2 รอบ
+    # กด fixplay1 ไม่ติดเลย → เช็ค ican-play อีกรอบ 15s แล้วลอง fixplay1 ใหม่ (กันค้างรอบเดียวจบ)
+    if not _icanplay_then_fixplay1(device, serial, LOGINNEW_ICANPLAY_WAIT, "เช็ค 1"):
         if not M.bot_running:
             return None
-        M.wait_and_click(device, f"fixplay{i}.bmp", folder=LOGINNEW_DIR, required=False, post_delay=LOGINNEW_STEP_DELAY)
+        if not _icanplay_then_fixplay1(device, serial, LOGINNEW_ICANPLAY_RETRY, "เช็ค 2"):
+            M.log(serial, "⚠️ กด fixplay1 ไม่ติดทั้ง 2 เช็ค → ไป fixplay2-4 ต่อ", Fore.YELLOW)
+
+    # fixplay2 → fixplay4 ตามลำดับ (รูปอยู่ img/devid/)
+    # ใช้ FIXPLAY1_TIMEOUT + log ตอนไม่เจอ — ของเดิมรอเงียบตัวละ 60s (DEFAULT_WAIT) เลยดูเหมือนค้าง
+    for i in range(2, 5):
+        if not M.bot_running:
+            return None
+        if not M.wait_and_click(device, f"fixplay{i}.bmp", folder=LOGINNEW_DIR, required=False,
+                                timeout=FIXPLAY1_TIMEOUT, post_delay=LOGINNEW_STEP_DELAY):
+            M.log(serial, f"⏰ ไม่เจอ fixplay{i} ใน {FIXPLAY1_TIMEOUT:.0f}s → ข้าม", Fore.YELLOW)
 
     return email, password
 
 
-def _export_login_new_txt(base, out_dir, email, password):
+def _export_login_new_txt(base, out_dir, email, password, ruby=None):
     """เขียนไฟล์ <base>.txt เก็บ credential -<email>/<password> ลง out_dir กันชื่อชน _2, _3, ...
-    (input จะเป็น .txt หรือ .zip ก็ได้ — output เป็น .txt ฟอร์แมตเดียวกันเสมอ)"""
+    (input จะเป็น .txt หรือ .zip ก็ได้ — output เป็น .txt ฟอร์แมตเดียวกันเสมอ)
+    ถ้ามี ruby (เลขจาก check-ruby) ต่อท้ายสุดเป็น [R=<เลข>] → <ชื่อ>+[ID]+[R=110].txt"""
+    if ruby:
+        base = f"{base.rstrip('+')}+[R={ruby}]"
     os.makedirs(out_dir, exist_ok=True)
     path = os.path.join(out_dir, f"{base}.txt")
     i = 2
@@ -1854,12 +1908,13 @@ def _run_maxgacha_body(device, found):
 #    - maxpet เปิดแต่ไม่มี trader → random-Fail (ชื่อเดิม)
 #    - maxpet ปิด (ไม่ได้สุ่ม) และไม่มี trader → login-success (ชื่อเดิม)
 # ═══════════════════════════════════════════════════════════════════════
-_RUBY_BRACKET_RE = re.compile(r"\[\d+\]")   # [300] [800] — bracket เลขล้วน = ruby (member ID มีตัวอักษรเสมอ)
+# ruby bracket: [300] (ฟอร์แมตเก่า) และ [R=110] (ฟอร์แมตใหม่) — member ID เป็นตัวอักษรล้วน ไม่โดน
+_RUBY_BRACKET_RE = re.compile(r"\[(?:\d+|[Rr]=\d+)\]")
 
 
 def _strip_ruby_brackets(name):
-    """ลบ bracket เลขล้วน [123] (ruby เก่า) ทิ้ง เก็บเฉพาะ [ID] ที่มีตัวอักษร → กัน [ruby] สะสมทุกรอบ
-    เช่น '[300]+[800]+backpack+[JQDNF8071]+[310]' → 'backpack+[JQDNF8071]'"""
+    """ลบ bracket ruby เก่า ([123] / [R=110]) ทิ้ง เก็บเฉพาะ [ID] ที่มีตัวอักษร → กัน [ruby] สะสมทุกรอบ
+    เช่น '[300]+backpack+[JQDNF8071]+[R=310]' → 'backpack+[JQDNF8071]'"""
     name = _RUBY_BRACKET_RE.sub("", name)
     return re.sub(r"\++", "+", name).strip("+")
 
@@ -2174,7 +2229,7 @@ def process_account(device, serial, zpath):
             M.close_app(device)
             email, password = login_new_creds if login_new_creds else _parse_login_new_creds(zpath)
             if email and password:
-                txt = _export_login_new_txt(os.path.splitext(name)[0], _shard_dir(LOGIN["login_failed_dir"]), email, password)
+                txt = _export_login_new_txt(base, _shard_dir(LOGIN["login_failed_dir"]), email, password)
                 M.log(serial, f"⚠️ login-new: login-failed → clear app + เก็บ {txt}", Fore.RED)
                 return True
             M.log(serial, "⚠️ login-new: login-failed + อ่าน credential ไม่ได้ → เก็บเข้า failed", Fore.RED)
@@ -2197,7 +2252,7 @@ def process_account(device, serial, zpath):
         if step_on("find") or step_on("find_treasure"):
             out_name, out_dir = _decide_find_export(base, found)
         else:
-            out_name, out_dir = os.path.splitext(name)[0], LOGIN["output_dir"]
+            out_name, out_dir = base, LOGIN["output_dir"]   # base = ชื่อเดิมที่ล้าง [ruby] เก่าแล้ว
         out_dir = _shard_dir(out_dir)   # แบ่งเป็น part-XXXX กันไฟล์กระจุกจน Explorer ค้าง
 
         # ── web_item: จดชื่อ set ที่เจอ → อัปเดตหน้าเว็บสถิติ (เหมือน export ปกติ) ──
@@ -2209,7 +2264,9 @@ def process_account(device, serial, zpath):
                 M.log(serial, f"  ⚠️ web_item บันทึกไม่ได้: {e}", Fore.YELLOW)
 
         email, password = login_new_creds if login_new_creds else (None, None)
-        txt = _export_login_new_txt(out_name, out_dir, email, password)
+        txt = _export_login_new_txt(out_name, out_dir, email, password, ruby=ruby)
+        if ruby:
+            M.log(serial, f"  ruby = {ruby} → ต่อท้ายชื่อ [R={ruby}]", Fore.GREEN)
         M.log(serial, f"✅ login-new → {txt}", Fore.GREEN)
         M.log(serial, f"└─ เสร็จบัญชี (login-new): {name}", Fore.GREEN)
         return True
@@ -2228,10 +2285,9 @@ def process_account(device, serial, zpath):
             out_name, out_dir = base, LOGIN["output_dir"]
         if out_dir == LOGIN["backup_id_dir"]:
             out_name = _count_prefix(out_name)   # เติม (0/N) เฉพาะไฟล์ที่เข้า backup-id
-        if ruby:   # เอาเลข ruby ไว้หน้าสุด ดูง่าย → [315]+<ชื่อ>+[ID]
-            out_name = f"[{ruby}]+" + out_name.rstrip("+")
         out_dir = _shard_dir(out_dir)   # แบ่งเป็น part-XXXX กันไฟล์กระจุกจน Explorer ค้าง
-        M.log(serial, f"→ เก็บ {out_name}.zip ใน {out_dir}/", Fore.GREEN)
+        # ruby ต่อท้ายใน export_login_zip (ต้องรอ [ID] ก่อน) → ชื่อจริงจะลงท้าย +[R=<เลข>]
+        M.log(serial, f"→ เก็บ {out_name}{f'+[R={ruby}]' if ruby else ''}.zip ใน {out_dir}/", Fore.GREEN)
 
         # ── web_item: ก่อนส่งไฟล์ออก จดชื่อ set ที่เจอ → อัปเดตหน้าเว็บสถิติ ──
         if step_on("web_item"):
@@ -2243,7 +2299,7 @@ def process_account(device, serial, zpath):
 
         M.close_app(device)
         device = M.enable_root(device)
-        out = export_login_zip(device, out_name, out_dir)
+        out = export_login_zip(device, out_name, out_dir, ruby=ruby)
         device = M.disable_root(device)
         if out is None:
             M.log(serial, f"└─ export ล้มเหลว → เก็บ {name} ไว้ที่เดิม", Fore.RED)
